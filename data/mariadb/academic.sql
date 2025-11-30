@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS writes (
     FOREIGN KEY (pid) REFERENCES publication(pid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Sample data (μπορείς να προσθέσεις περισσότερα)
+-- Sample data
 INSERT INTO domain (did, name) VALUES
 (1, 'Machine Learning'),
 (2, 'Database Systems'),

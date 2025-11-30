@@ -1,6 +1,6 @@
 """
 database/db_manager.py
-Enhanced database manager με support για text2sql datasets
+Enhanced database manager με support for text2sql datasets
 """
 
 import pandas as pd
@@ -11,7 +11,7 @@ from sqlalchemy import text, inspect
 from database.connection import get_engine
 
 class DatabaseManager:
-    """Enhanced database manager για text2sql experiments"""
+    """Enhanced database manager for text2sql experiments"""
     
     # Dataset database mapping
     DATASET_DATABASES = {

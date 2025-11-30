@@ -12,27 +12,27 @@ Write-Host "Step 1: Checking prerequisites..." -ForegroundColor Yellow
 # Check Docker
 try {
     $dockerVersion = docker --version
-    Write-Host "   ✓ Docker installed: $dockerVersion" -ForegroundColor Green
+    Write-Host "   Docker installed: $dockerVersion" -ForegroundColor Green
 } catch {
-    Write-Host "   ✗ Docker not found! Please install Docker Desktop." -ForegroundColor Red
+    Write-Host "   Docker not found! Please install Docker Desktop." -ForegroundColor Red
     exit 1
 }
 
 # Check Docker Compose
 try {
     $composeVersion = docker-compose --version
-    Write-Host "   ✓ Docker Compose: $composeVersion" -ForegroundColor Green
+    Write-Host "   Docker Compose: $composeVersion" -ForegroundColor Green
 } catch {
-    Write-Host "   ✗ Docker Compose not found!" -ForegroundColor Red
+    Write-Host "   Docker Compose not found!" -ForegroundColor Red
     exit 1
 }
 
 # Check Python
 try {
     $pythonVersion = python --version
-    Write-Host "   ✓ Python: $pythonVersion" -ForegroundColor Green
+    Write-Host "   Python: $pythonVersion" -ForegroundColor Green
 } catch {
-    Write-Host "   ✗ Python not found! Please install Python 3.8+." -ForegroundColor Red
+    Write-Host "   Python not found! Please install Python 3.8+." -ForegroundColor Red
     exit 1
 }
 
@@ -56,9 +56,9 @@ $directories = @(
 foreach ($dir in $directories) {
     if (!(Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        Write-Host "   ✓ Created: $dir" -ForegroundColor Green
+        Write-Host "   Created: $dir" -ForegroundColor Green
     } else{
-        Write-Host "   ○ Exists: $dir" -ForegroundColor Gray
+        Write-Host "   Exists: $dir" -ForegroundColor Gray
     }
 }
 
@@ -80,9 +80,9 @@ MARIADB_USER=text2sql_user
 MARIADB_PASSWORD=text2sql_pass
 "@
     $envContent | Out-File -FilePath ".env" -Encoding UTF8
-    Write-Host "   ✓ Created .env file" -ForegroundColor Green
+    Write-Host "   Created .env file" -ForegroundColor Green
 } else {
-    Write-Host "   ○ .env file exists" -ForegroundColor Gray
+    Write-Host "   .env file exists" -ForegroundColor Gray
 }
 
 # Step 4: Create virtual environment
@@ -91,9 +91,9 @@ Write-Host "Step 4: Setting up Python virtual environment..." -ForegroundColor Y
 
 if (!(Test-Path "venv")) {
     python -m venv venv
-    Write-Host "   ✓ Virtual environment created" -ForegroundColor Green
+    Write-Host "   Virtual environment created" -ForegroundColor Green
 } else {
-    Write-Host "   ○ Virtual environment exists" -ForegroundColor Gray
+    Write-Host "   Virtual environment exists" -ForegroundColor Gray
 }
 
 # Activate and install packages
@@ -116,7 +116,7 @@ foreach ($package in $packages) {
     & .\venv\Scripts\python.exe -m pip install -q $package
     Write-Host " Done" -ForegroundColor Green
 }
-Write-Host "   ✓ Python packages installed" -ForegroundColor Green
+Write-Host "   Python packages installed" -ForegroundColor Green
 
 # Step 5: Download datasets
 Write-Host ""
@@ -125,7 +125,7 @@ Write-Host "Step 5: Downloading text2sql datasets..." -ForegroundColor Yellow
 if (Test-Path "scripts\download_datasets.py") {
     & .\venv\Scripts\python.exe scripts\download_datasets.py
 } else {
-    Write-Host "   ⚠ download_datasets.py not found, skipping..." -ForegroundColor Yellow
+    Write-Host "   download_datasets.py not found, skipping..." -ForegroundColor Yellow
 }
 
 # Step 6: Extract schemas
@@ -135,7 +135,7 @@ Write-Host "Step 6: Extracting database schemas..." -ForegroundColor Yellow
 if (Test-Path "scripts\extract_schemas.py") {
     & .\venv\Scripts\python.exe scripts\extract_schemas.py
 } else {
-    Write-Host "   ⚠ extract_schemas.py not found, skipping..." -ForegroundColor Yellow
+    Write-Host "   extract_schemas.py not found, skipping..." -ForegroundColor Yellow
 }
 
 # Step 7: Start Docker containers
@@ -157,7 +157,7 @@ Write-Host "Step 8: Testing database connections..." -ForegroundColor Yellow
 if (Test-Path "scripts\test_connections.py") {
     & .\venv\Scripts\python.exe scripts\test_connections.py
 } else {
-    Write-Host "   ⚠ test_connections.py not found, skipping..." -ForegroundColor Yellow
+    Write-Host "   test_connections.py not found, skipping..." -ForegroundColor Yellow
 }
 
 # Summary

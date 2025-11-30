@@ -8,51 +8,52 @@ import re
 from pathlib import Path
 from collections import defaultdict
 
+
 class SchemaExtractor:
-    """Extract schemas από text2sql datasets"""
-    
+    """Extract schemas from text2sql datasets"""
+
     def __init__(self, dataset_path):
         self.dataset_path = Path(dataset_path)
         self.schemas = {}
-    
+
     def extract_from_json(self, json_file):
-        """Extract schema από JSON dataset"""
-        with open(json_file, 'r', encoding='utf-8') as f:
+        """Extract schema from JSON dataset"""
+        with open(json_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
-        # Analyze SQL queries για schema inference
+
+        # Analyze SQL queries for schema inference
         tables = defaultdict(set)
-        
+
         for item in data:
-            sql = item.get('sql') or item.get('query') or item.get('query_sql', '')
-            
+            sql = item.get("sql") or item.get("query") or item.get("query_sql", "")
+
             # Extract table names (basic regex)
             # FROM clause
-            from_matches = re.findall(r'FROM\s+(\w+)', sql, re.IGNORECASE)
+            from_matches = re.findall(r"FROM\s+(\w+)", sql, re.IGNORECASE)
             for table in from_matches:
-                tables[table.lower()].add('inferred_from_FROM')
-            
+                tables[table.lower()].add("inferred_from_FROM")
+
             # JOIN clause
-            join_matches = re.findall(r'JOIN\s+(\w+)', sql, re.IGNORECASE)
+            join_matches = re.findall(r"JOIN\s+(\w+)", sql, re.IGNORECASE)
             for table in join_matches:
-                tables[table.lower()].add('inferred_from_JOIN')
-        
+                tables[table.lower()].add("inferred_from_JOIN")
+
         return dict(tables)
-    
+
     def generate_sql_schema(self, dataset_name, tables_info):
         """Generate CREATE TABLE statements"""
-        
+
         # Manual schemas based on dataset documentation
         # You'll need to create these based on the actual schemas
-        
+
         schemas = {
-            'academic': self._academic_schema(),
-            'imdb': self._imdb_schema(),
-            'yelp': self._yelp_schema()
+            "academic": self._academic_schema(),
+            "imdb": self._imdb_schema(),
+            "yelp": self._yelp_schema(),
         }
-        
+
         return schemas.get(dataset_name, self._generic_schema(tables_info))
-    
+
     def _academic_schema(self):
         """Academic dataset schema"""
         return """
@@ -167,7 +168,7 @@ CREATE TABLE IF NOT EXISTS writes (
     FOREIGN KEY (pid) REFERENCES publication(pid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Sample data (μπορείς να προσθέσεις περισσότερα)
+-- Sample data
 INSERT INTO domain (did, name) VALUES
 (1, 'Machine Learning'),
 (2, 'Database Systems'),
@@ -180,7 +181,7 @@ INSERT INTO keyword (kid, keyword) VALUES
 
 SELECT 'Academic database initialized' AS status;
 """
-    
+
     def _imdb_schema(self):
         """IMDB dataset schema"""
         return """
@@ -263,7 +264,7 @@ INSERT INTO actors (aid, name, nationality, birth_year) VALUES
 
 SELECT 'IMDB database initialized' AS status;
 """
-    
+
     def _yelp_schema(self):
         """Yelp dataset schema"""
         return """
@@ -349,11 +350,11 @@ INSERT INTO user (uid, user_id, name) VALUES
 
 SELECT 'Yelp database initialized' AS status;
 """
-    
+
     def _generic_schema(self, tables_info):
-        """Generic schema για unknown datasets"""
+        """Generic schema for unknown datasets"""
         schema = "-- Generic schema\n\n"
-        
+
         for table, info in tables_info.items():
             schema += f"""
 CREATE TABLE IF NOT EXISTS {table} (
@@ -361,41 +362,43 @@ CREATE TABLE IF NOT EXISTS {table} (
     data TEXT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """
-        
+
         return schema
+
 
 def main():
     """Generate SQL schema files"""
     print("🔧 Schema Extraction Tool")
-    print("="*60)
-    
+    print("=" * 60)
+
     extractor = SchemaExtractor("datasets_source/data")
-    
-    datasets = ['academic', 'imdb', 'yelp']
-    
+
+    datasets = ["academic", "imdb", "yelp"]
+
     for dataset_name in datasets:
         print(f"\n📊 Processing: {dataset_name}")
-        
+
         # Generate schema
         schema_sql = extractor.generate_sql_schema(dataset_name, {})
-        
-        # Save για MySQL
+
+        # Save for MySQL
         mysql_path = Path(f"data/mysql/{dataset_name}.sql")
         mysql_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(mysql_path, 'w', encoding='utf-8') as f:
+        with open(mysql_path, "w", encoding="utf-8") as f:
             f.write(schema_sql)
         print(f"   ✅ MySQL schema: {mysql_path}")
-        
-        # Save για MariaDB (ίδιο schema)
+
+        # Save for MariaDB (ίδιο schema)
         mariadb_path = Path(f"data/mariadb/{dataset_name}.sql")
         mariadb_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(mariadb_path, 'w', encoding='utf-8') as f:
+        with open(mariadb_path, "w", encoding="utf-8") as f:
             f.write(schema_sql)
         print(f"   ✅ MariaDB schema: {mariadb_path}")
-    
+
     print(f"\n✅ Schema extraction complete!")
     print(f"📁 MySQL schemas: data/mysql/")
     print(f"📁 MariaDB schemas: data/mariadb/")
+
 
 if __name__ == "__main__":
     main()
