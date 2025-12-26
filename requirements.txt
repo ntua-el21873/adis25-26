@@ -7,9 +7,17 @@ PyMySQL==1.1.2
 # -----------------------------
 # Data handling & utilities
 # -----------------------------
-pandas==2.3.3
-numpy==2.4.0
+pandas==2.1.4
+numpy==1.26.4
 tqdm==4.67.1
+
+# -----------------------------
+# LLM models & acceleration
+# -----------------------------
+transformers==4.45.2
+torch==2.2.2
+accelerate==0.34.2
+
 
 # -----------------------------
 # Configuration & environment
@@ -27,4 +35,4 @@ requests==2.32.5
 # (safe to include; not required at runtime)
 # -----------------------------
 jupyterlab==4.5.1
-ipython==9.8.0
+# ipython==9.8.0
