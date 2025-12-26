@@ -1,6 +1,9 @@
 # setup.ps1 - Complete Windows setup script
 # Run as: .\setup.ps1
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
 function Info($msg)  { Write-Host "[Info]   $msg" -ForegroundColor Cyan }
 function Ok($msg)    { Write-Host "[OK]   $msg" -ForegroundColor Green }
 function Warn($msg)  { Write-Host "[Warn]   $msg" -ForegroundColor Yellow }
@@ -58,20 +61,6 @@ Write-Host ""
 Write-Host "Step 2: Creating directory structure..." -ForegroundColor Yellow
 
 # Create runtime directories
-$runtimeDirs = @(
-    "data\processed",
-    "results"
-)
-
-foreach ($dir in $runtimeDirs) {
-    if (!(Test-Path $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        Ok "Created: $dir"
-    } else {
-        Info "Exists: $dir"
-    }
-}
-
 $directories = @(
     "data\mysql",
     "data\mariadb",
@@ -170,7 +159,6 @@ if (Test-Path "requirements.txt") {
     & $venvPython -m pip install @packages
     Ok "Installed minimal dependencies"
 }
-
 
 # ----------------------------
 # Step 5: Download datasets
