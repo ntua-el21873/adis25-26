@@ -48,7 +48,7 @@ services:
       MYSQL_USER: ${MARIADB_USER:-text2sql_user}
       MYSQL_PASSWORD: ${MARIADB_PASSWORD:-text2sql_pass}
     ports:
-      - "3307:3307"
+      - "3307:3306"
     volumes:
       # Persistent storage
       - mariadb_data:/var/lib/mysql
