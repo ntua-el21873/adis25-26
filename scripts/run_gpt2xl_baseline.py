@@ -4,18 +4,9 @@ scripts/run_gpt2xl_baseline.py
 Run a simple, reproducible Text2SQL baseline using GPT-2 XL on a Text2SQL dataset
 in the jkkummerfeld/text2sql-data JSON format.
 
-What it does (per entry -> per sentence):
-  1) Read dataset JSON (list of query entries)
-  2) For each sentence (question) inside an entry:
-      - build a compact schema (table + columns), optionally filtered by question keywords
-      - generate SQL via GPT-2 XL (deterministic)
-      - execute predicted SQL on MySQL and MariaDB
-      - write one JSONL record per sentence to results/
-
-Notes:
-  - GPT-2 XL has a 1024-token context window; the agent should compact schema (and/or truncate).
-  - This script assumes the dataset database exists in both RDBMS with the same name as the dataset file stem
-    e.g., datasets_source/data/advising.json -> database "advising"
+Adds:
+  --rdbms mysql|mariadb|both
+  Output file name auto-derived per dataset + rdbms, saved under results/
 """
 
 import argparse
@@ -24,11 +15,13 @@ import sys
 import time
 from pathlib import Path
 
+from sql_utils import fill_gold_sql, normalize_pred_sql, compare_results
+
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from models.gpt2xl_agent import GPT2XLAgent  # noqa: E402
-from database.db_manager import DatabaseManager, compare_results  # noqa: E402
+from models.gpt2xl_agent import GPT2XLAgent
+from database.db_manager import DatabaseManager
 
 
 def get_query_split(entry: dict) -> str:
@@ -71,6 +64,41 @@ def load_dataset(path: Path) -> list[dict]:
     return data
 
 
+def _default_out_path(dataset_name: str, rdbms: str) -> Path:
+    # results/gpt2xl_baseline_<dataset>_<rdbms>.jsonl
+    return Path("results") / f"gpt2xl_baseline_{dataset_name}_{rdbms}.jsonl"
+
+
+def _pack_exec_result(res: dict | None):
+    if res is None:
+        return None
+    return {
+        "success": res.get("success"),
+        "execution_time_s": res.get("execution_time"),
+        "rows": res.get("rows_affected"),
+        "error": res.get("error"),
+    }
+
+
+def _results_match(res_a: dict | None, res_b: dict | None) -> bool | None:
+    """
+    Return:
+      - True/False if both succeeded and have DataFrame results
+      - None if not comparable (e.g., one failed, or no tabular results)
+    """
+    if not res_a or not res_b:
+        return None
+    if not res_a.get("success") or not res_b.get("success"):
+        return None
+
+    df_a = res_a.get("result")
+    df_b = res_b.get("result")
+    if df_a is None or df_b is None:
+        return None
+
+    return compare_results(df_a, df_b)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -80,9 +108,16 @@ def main() -> int:
         help="Path to dataset JSON file (text2sql-data format).",
     )
     parser.add_argument(
+        "--rdbms",
+        type=str,
+        default="mysql",
+        choices=["mysql", "mariadb", "both"],
+        help="RDBMS to use for execution.",
+    )
+    parser.add_argument(
         "--limit_entries",
         type=int,
-        default=50,
+        default=1,
         help="Process only the first N entries (each entry may contain multiple sentences).",
     )
     parser.add_argument(
@@ -94,14 +129,14 @@ def main() -> int:
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=120,
+        default=128,
         help="Max tokens to generate for SQL.",
     )
     parser.add_argument(
         "--out",
         type=str,
-        default="results/gpt2xl_baseline.jsonl",
-        help="Output JSONL path.",
+        default="",
+        help="Optional output JSONL path. If omitted, saved under results/ with an RDBMS-specific name.",
     )
     args = parser.parse_args()
 
@@ -110,15 +145,20 @@ def main() -> int:
         print(f"❌ Dataset not found: {dataset_path}")
         return 1
 
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
     dataset_name = dataset_path.stem  # used as DB name convention
 
+    # Decide output path
+    if args.out.strip():
+        out_path = Path(args.out)
+    else:
+        out_path = _default_out_path(dataset_name, args.rdbms)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     print("🧪 GPT-2 XL Text2SQL Baseline Runner")
     print("=" * 70)
     print(f"Dataset file: {dataset_path}")
     print(f"Dataset name (DB): {dataset_name}")
+    print(f"RDBMS: {args.rdbms}")
     print(f"Output: {out_path}")
     print(f"Entry limit: {args.limit_entries}")
     print(f"Schema max tables: {args.max_tables}")
@@ -130,9 +170,18 @@ def main() -> int:
     # Initialize model once
     agent = GPT2XLAgent()
 
-    # Reuse DB connections
-    mysql = DatabaseManager("mysql")
-    maria = DatabaseManager("mariadb")
+    # We will always open a MySQL connection for schema introspection
+    # (because schema is shared and you already use mysql.get_compact_schema()).
+    # If you want pure-mariadb runs without mysql at all, we can switch introspection too.
+    mysql_for_schema = DatabaseManager("mysql")
+
+    mysql_db = None
+    maria_db = None
+
+    if args.rdbms in ("mysql", "both"):
+        mysql_db = DatabaseManager("mysql")
+    if args.rdbms in ("mariadb", "both"):
+        maria_db = DatabaseManager("mariadb")
 
     # Counters
     row_id = 0
@@ -152,105 +201,146 @@ def main() -> int:
                 question_split = get_question_split(sentence)
                 question_vars = get_sentence_variables(sentence)
 
-                # Build compact schema using MySQL inspector (assumes both DBs share schema)
-                # IMPORTANT: your DatabaseManager must include get_compact_schema(...) as discussed.
-                schema_compact = mysql.get_compact_schema(
+                # Compact schema for prompt
+                schema_compact = mysql_for_schema.get_compact_schema(
                     database=dataset_name,
                     question=question_text,
                     max_tables=args.max_tables,
                 )
 
+                # Gold SQL executable (filled with values)
+                gold_sql_exec = fill_gold_sql(entry, sentence)
+
                 # Generate SQL
                 t0 = time.time()
-                pred_sql = agent.generate_sql(
+                pred_sql_raw = agent.generate_sql(
                     schema=schema_compact,
                     question=question_text,
                     max_new_tokens=args.max_new_tokens,
                 )
+
+                # Normalize prediction (table casing etc.)
+                schema_tables = mysql_for_schema.get_table_names(database=dataset_name)
+                pred_sql = normalize_pred_sql(pred_sql_raw, schema_tables)
                 gen_time = time.time() - t0
 
-                # Execute on MySQL
-                mysql.switch_database(dataset_name)
-                mysql_res = mysql.execute_query(pred_sql)
+                # Execute on selected RDBMS
+                mysql_pred = mysql_gold = None
+                maria_pred = maria_gold = None
 
-                # Execute on MariaDB
-                maria.switch_database(dataset_name)
-                maria_res = maria.execute_query(pred_sql)
+                if mysql_db is not None:
+                    mysql_db.switch_database(dataset_name)
+                    mysql_pred = mysql_db.execute_query(pred_sql)
+                    mysql_gold = mysql_db.execute_query(gold_sql_exec)  # NEW
 
-                # Result matching (only if both succeeded and returned tabular results)
+                    if mysql_pred.get("success"):
+                        n_ok_mysql += 1
+
+                if maria_db is not None:
+                    maria_db.switch_database(dataset_name)
+                    maria_pred = maria_db.execute_query(pred_sql)
+                    maria_gold = maria_db.execute_query(gold_sql_exec)  # NEW
+
+                    if maria_pred.get("success"):
+                        n_ok_maria += 1
+
+                # Cross-RDBMS match only in "both" mode (predicted SQL)
                 match = None
-                if mysql_res.get("success") and maria_res.get("success"):
-                    n_both_ok += 1
-                    if mysql_res.get("result") is not None and maria_res.get("result") is not None:
-                        match = compare_results(mysql_res["result"], maria_res["result"])
-                        if match:
-                            n_match += 1
+                if mysql_pred is not None and maria_pred is not None:
+                    if mysql_pred.get("success") and maria_pred.get("success"):
+                        n_both_ok += 1
+                        if mysql_pred.get("result") is not None and maria_pred.get("result") is not None:
+                            match = compare_results(mysql_pred["result"], maria_pred["result"])
+                            if match:
+                                n_match += 1
 
-                if mysql_res.get("success"):
-                    n_ok_mysql += 1
-                if maria_res.get("success"):
-                    n_ok_maria += 1
+                # Execution accuracy: predicted vs gold per-RDBMS
+                mysql_exec_match = _results_match(mysql_pred, mysql_gold)  # NEW
+                maria_exec_match = _results_match(maria_pred, maria_gold)  # NEW
 
                 record = {
                     "id": row_id,
                     "dataset": dataset_name,
 
-                    # Format-consistent metadata
+                    # Dataset metadata
                     "query_split": query_split,
                     "question_split": question_split,
                     "question_text": question_text,
                     "question_variables": question_vars,
 
-                    # Gold SQL (variables may remain as placeholders)
+                    # Gold SQL (raw + executable)
                     "gold_sql_first": gold_sql_first,
                     "gold_sql_variants": sql_variants,
+                    "gold_sql_exec": gold_sql_exec,  # executable version
 
                     # Prompt inputs
                     "schema_compact": schema_compact,
 
                     # Model output + timings
-                    "pred_sql": pred_sql,
+                    "pred_sql_raw": pred_sql_raw,  # unnormalized
+                    "pred_sql": pred_sql,          # normalized used for execution
                     "gen_time_s": round(gen_time, 4),
 
-                    # DB exec results
-                    "mysql": {
-                        "success": mysql_res.get("success"),
-                        "execution_time_s": mysql_res.get("execution_time"),
-                        "rows": mysql_res.get("rows_affected"),
-                        "error": mysql_res.get("error"),
-                    },
-                    "mariadb": {
-                        "success": maria_res.get("success"),
-                        "execution_time_s": maria_res.get("execution_time"),
-                        "rows": maria_res.get("rows_affected"),
-                        "error": maria_res.get("error"),
-                    },
+                    "rdbms_mode": args.rdbms,
+
+                    # Pred exec results
+                    "mysql": _pack_exec_result(mysql_pred),
+                    "mariadb": _pack_exec_result(maria_pred),
+
+                    # Gold exec results (NEW)
+                    "mysql_gold": _pack_exec_result(mysql_gold),
+                    "mariadb_gold": _pack_exec_result(maria_gold),
+
+                    # Execution match pred vs gold (NEW)
+                    "mysql_pred_vs_gold_match": mysql_exec_match,
+                    "mariadb_pred_vs_gold_match": maria_exec_match,
+
+                    # Only meaningful in both-mode (predicted cross-db match)
                     "mysql_vs_mariadb_match": match,
                 }
 
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+                # Console line (include exec match if available)
+                mysql_status = "-"
+                maria_status = "-"
+                if mysql_pred is not None:
+                    mysql_status = "OK" if mysql_pred.get("success") else "FAIL"
+                if maria_pred is not None:
+                    maria_status = "OK" if maria_pred.get("success") else "FAIL"
+
+                # NEW: show exec-accuracy status compactly
+                mysql_acc = "-" if mysql_exec_match is None else ("✔" if mysql_exec_match else "✘")
+                maria_acc = "-" if maria_exec_match is None else ("✔" if maria_exec_match else "✘")
+
                 print(
                     f"[{row_id}] qsplit={query_split or '-'} ssplit={question_split or '-'} "
-                    f"mysql={'OK' if mysql_res.get('success') else 'FAIL'} "
-                    f"maria={'OK' if maria_res.get('success') else 'FAIL'}"
+                    f"mysql={mysql_status}/{mysql_acc} maria={maria_status}/{maria_acc}"
                 )
 
                 row_id += 1
 
-    mysql.close()
-    maria.close()
+
+    # Close connections
+    mysql_for_schema.close()
+    if mysql_db is not None:
+        mysql_db.close()
+    if maria_db is not None:
+        maria_db.close()
 
     print("\n" + "=" * 70)
     print("📊 Summary")
     print("=" * 70)
     print(f"Total questions processed: {row_id}")
     if row_id > 0:
-        print(f"MySQL success rate:   {n_ok_mysql}/{row_id} ({n_ok_mysql/row_id*100:.1f}%)")
-        print(f"MariaDB success rate: {n_ok_maria}/{row_id} ({n_ok_maria/row_id*100:.1f}%)")
-        print(f"Both succeeded:       {n_both_ok}/{row_id} ({n_both_ok/row_id*100:.1f}%)")
-        if n_both_ok > 0:
-            print(f"Result match rate:    {n_match}/{n_both_ok} ({n_match/n_both_ok*100:.1f}%)")
+        if args.rdbms in ("mysql", "both"):
+            print(f"MySQL success rate:   {n_ok_mysql}/{row_id} ({n_ok_mysql/row_id*100:.1f}%)")
+        if args.rdbms in ("mariadb", "both"):
+            print(f"MariaDB success rate: {n_ok_maria}/{row_id} ({n_ok_maria/row_id*100:.1f}%)")
+        if args.rdbms == "both":
+            print(f"Both succeeded:       {n_both_ok}/{row_id} ({n_both_ok/row_id*100:.1f}%)")
+            if n_both_ok > 0:
+                print(f"Result match rate:    {n_match}/{n_both_ok} ({n_match/n_both_ok*100:.1f}%)")
     print(f"\n✅ Wrote results to: {out_path}")
 
     return 0
