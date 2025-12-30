@@ -10,7 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.db_manager import DatabaseManager
-from database.db_manager import compare_results
+from scripts.sql_utils import compare_results
+
 
 def test_connection(db_type):
     """Test connection to database"""

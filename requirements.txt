@@ -7,15 +7,16 @@ PyMySQL==1.1.2
 # -----------------------------
 # Data handling & utilities
 # -----------------------------
-pandas==2.1.4
-numpy==1.26.4
+
+numpy==2.1.0
+pandas==2.3.3
 tqdm==4.67.1
 
 # -----------------------------
 # LLM models & acceleration
 # -----------------------------
 transformers==4.45.2
-torch==2.2.2
+torch==2.7.1
 accelerate==0.34.2
 
 

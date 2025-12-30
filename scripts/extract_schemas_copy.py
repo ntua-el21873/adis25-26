@@ -142,10 +142,11 @@ def docker_mysql_exec(db_type: str, creds: DbCreds, sql: str) -> None:
     """Execute a one-liner SQL command inside the container."""
     container = CONTAINERS[db_type]
     # mysql client exists in both mysql and mariadb images
+    client = "mysql" if db_type == "mysql" else "mariadb"
     cmd = [
-        "docker", "exec", "-i", container,
-        "mysql", "-uroot", f"-p{creds.root_password}",
-        "-e", sql
+    "docker", "exec", "-i", container,
+    client, "-uroot", f"-p{creds.root_password}",
+    "-e", sql
     ]
     run(cmd)
 
@@ -156,9 +157,10 @@ def docker_mysql_import_file(db_type: str, creds: DbCreds, dataset_db: str, sql_
     We call: mysql -uroot -p... <db> < file.sql
     """
     container = CONTAINERS[db_type]
+    client = "mysql" if db_type == "mysql" else "mariadb"
     cmd = [
-        "docker", "exec", "-i", container,
-        "mysql", "-uroot", f"-p{creds.root_password}", dataset_db
+    "docker", "exec", "-i", container,
+    client, "-uroot", f"-p{creds.root_password}", dataset_db
     ]
     run(cmd, input_path=sql_file)
 
@@ -184,12 +186,14 @@ def extract_schema_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{db_name}.schema.sql"
 
+    dump = "mysqldump" if db_type == "mysql" else "mariadb-dump"
     cmd = [
-        "docker", "exec", "-i", container,
-        "mysqldump", "-uroot", f"-p{creds.root_password}",
-        "--no-data", "--routines", "--triggers",
-        db_name
+    "docker", "exec", "-i", container,
+    dump, "-uroot", f"-p{creds.root_password}",
+    "--no-data", "--routines", "--triggers",
+    db_name
     ]
+
 
     print(f"🧾 Writing schema snapshot: {out_path}")
     with out_path.open("wb") as f:
