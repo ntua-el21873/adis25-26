@@ -60,7 +60,7 @@ def main():
     parser.add_argument(
         "--rdbms",
         type=str,
-        default="mysql",
+        default="mariadb",
         choices=["mysql", "mariadb"],
         help="Which RDBMS to use for schema introspection (default: mysql).",
     )
