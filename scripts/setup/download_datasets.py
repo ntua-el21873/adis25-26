@@ -13,37 +13,35 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 DATASETS: Dict[str, Dict[str, str]] = {
-    "academic": {
-        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/academic.json",
-        "description": "Academic publications database - 196 queries, 8 tables",
-    },
-    "imdb": {
-        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/imdb.json",
-        "description": "Internet Movie Database - 131 queries, 7 tables",
-    },
-    "yelp": {
-        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/yelp.json",
-        "description": "Yelp reviews database - 128 queries, 6 tables",
-    },
-    "geography": {
-        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/geography.json",
-        "description": "US Geography database - 877 queries, 2 tables",
-    },
-    "restaurants": {
-        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/restaurants.json",
-        "description": "Restaurant database (GeoQuery)",
-    },
     "advising": {
         "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/advising.json",
-        "description": "University advising database",
+        "description": "205 queries, 15 tables",
     },
     "atis": {
         "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/atis.json",
-        "description": "Airline travel information system",
+        "description": "947 queries, 25 tables",
+    },
+    "imdb": {
+        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/imdb.json",
+        "description": "89 queries, 16 tables",
+    },
+
+    "yelp": {
+        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/yelp.json",
+        "description": "110 queries, 7 tables",
     },
 }
-
-SQL_KEYS = ["sql", "query", "query_sql", "sql_query", "sqls"]
+'''
+Unused datasets:
+    "restaurants": {
+        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/restaurants.json",
+        "description": "23 queries, 8 tables",
+    },
+        "academic": {
+        "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/academic.json",
+        "description": "185 queries, 15 tables",
+    },
+'''
 
 
 def make_session() -> requests.Session:
@@ -73,65 +71,21 @@ def save_json(path: Path, obj: Any) -> None:
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
-def detect_sql_field(sample: Dict[str, Any]) -> Optional[str]:
-    """Return the key that most likely stores SQL, else None."""
-    for k in SQL_KEYS:
-        if k in sample:
-            return k
-    return None
-
-
-def normalize_sql(value: Any) -> str:
-    """Convert possibly-tokenized SQL to a single uppercase string."""
-    if isinstance(value, list):
-        return " ".join(str(x) for x in value).upper()
-    return str(value).upper()
-
-
-def estimate_complexity(sql: str) -> str:
-    """Cheap heuristic: simple / medium / complex."""
-    join_count = sql.count("JOIN")
-    select_count = sql.count("SELECT")
-    has_group = "GROUP BY" in sql
-    has_having = "HAVING" in sql
-    has_set_ops = any(op in sql for op in ("UNION", "INTERSECT", "EXCEPT"))
-    subqueries = max(0, select_count - 1)
-
-    score = 0
-    score += join_count * 2
-    score += subqueries * 3
-    score += 2 if has_group else 0
-    score += 2 if has_having else 0
-    score += 3 if has_set_ops else 0
-
-    if score <= 1:
-        return "simple"
-    if score <= 6:
-        return "medium"
-    return "complex"
-
-
 def analyze_dataset(data: List[Dict[str, Any]], name: str) -> Dict[str, Any]:
     """Return analysis dict for manifest."""
     if not data:
         return {"name": name, "total": 0, "sql_key": None, "complexity": {}}
 
     sample = data[0]
-    sql_key = detect_sql_field(sample)
 
     dist = {"simple": 0, "medium": 0, "complex": 0}
-    if sql_key:
-        for item in data:
-            sql_raw = item.get(sql_key, "")
-            sql = normalize_sql(sql_raw)
-            dist[estimate_complexity(sql)] += 1
+    for item in data:
+            sql = item.get("sql", "")
 
     return {
         "name": name,
         "total": len(data),
         "keys": list(sample.keys()),
-        "sql_key": sql_key,
-        "complexity": dist,
     }
 
 
@@ -139,21 +93,21 @@ def download_dataset(
     session: requests.Session,
     name: str,
     url: str,
-    output_dir: Path,
+    out_dir: Path,
     force: bool = False,
 ) -> Tuple[Optional[List[Dict[str, Any]]], Path, str]:
     """Download dataset from URL unless cached."""
-    output_path = output_dir / f"{name}.json"
+    
+    out_path = out_dir / f"{name}.json"
+    if out_path.exists() and not force:
+        return load_json(out_path), out_path, "cached"
 
-    if output_path.exists() and not force:
-        return load_json(output_path), output_path, "cached"
-
-    resp = session.get(url, timeout=30)
+    resp = session.get(url, timeout=60)
     resp.raise_for_status()
 
     data = resp.json()
-    save_json(output_path, data)
-    return data, output_path, "downloaded"
+    save_json(out_path, data)
+    return data, out_path, "downloaded"
 
 
 def main() -> int:
@@ -185,16 +139,7 @@ def main() -> int:
 
             print(f"📁 {mode.upper()}: {path}")
             print(f"📊 Total examples: {analysis['total']}")
-            if analysis["sql_key"]:
-                c = analysis["complexity"]
-                total = max(1, analysis["total"])
-                print("   Complexity:")
-                print(f"      Simple:  {c['simple']} ({c['simple']/total*100:.1f}%)")
-                print(f"      Medium:  {c['medium']} ({c['medium']/total*100:.1f}%)")
-                print(f"      Complex: {c['complex']} ({c['complex']/total*100:.1f}%)")
-            else:
-                print("⚠️  Could not detect SQL field key in dataset entries.")
-
+            
             manifest["datasets"].append(
                 {
                     "name": name,
