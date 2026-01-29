@@ -4,6 +4,7 @@ SQL utilities for Text2SQL evaluation.
 
 - fill_gold_sql: materialize gold SQL with concrete values
 - normalize_pred_sql: minor normalization so SQL executes reliably
+
 """
 
 import re
@@ -13,7 +14,7 @@ from difflib import SequenceMatcher
 _QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")")
 
 # Capture a table identifier right after FROM/JOIN/UPDATE/INTO/DELETE FROM
-# Supports optional backticks and optional db.table form (we only fix the table part).
+# Supports optional backticks and optional db.table form.
 _TABLE_POS = re.compile(
     r"""
     \b(?:
@@ -29,6 +30,7 @@ _TABLE_POS = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Helper to compute similarity ratio
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 

@@ -10,7 +10,7 @@ No aggregation here; metrics are derived later from CSV.
 Required output fields included:
 - Identifiers: id, dataset, llm, rdbms
 - Question metadata: question_text, question_text_filled, question_variables, query_split, question_split, difficulty (optional)
-- Gold SQL: gold_sql_first, gold_sql_exec, gold_sql_variants (optional)
+- Gold SQL: gold_sql_first, gold_sql_exec
 - Schema/prompt: schema_compact, schema_num_tables, schema_num_columns (optional), prompt_tokens
 - LLM output: pred_sql_raw, pred_sql, gen_time_s
 - Execution (flat namespaced): {rdbms}_pred.success/time/error, {rdbms}_gold..., {rdbms}_pred_vs_gold_match
@@ -76,17 +76,88 @@ def get_sentence_variables(sentence: dict) -> Dict[str, Any]:
     return vars_map if isinstance(vars_map, dict) else {}
 
 
-def get_difficulty(entry: dict, sentence: dict) -> Any:
-    # Spec: include only if present in the dataset file.
-    if "difficulty" in sentence:
-        return sentence.get("difficulty")
-    if "difficulty" in entry:
-        return entry.get("difficulty")
-    
-    # if not present, calculate from SQL (optional)
-    gold_sql = entry["sql"]
-    # now we make a score for the sql query depending on how difficult it is (simple, medium, complex)
-    return None
+def _count_from_sources(sql_upper: str) -> int:
+    """
+    Count number of table sources in FROM clause:
+    - supports implicit joins (comma-separated)
+    - supports explicit JOINs
+    """
+    m = re.search(r"\bFROM\b(.*?)(\bWHERE\b|\bGROUP\s+BY\b|\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|\bINTERSECT\b|\bEXCEPT\b|;|$)",
+                  sql_upper, flags=re.DOTALL)
+    if not m:
+        return 0
+
+    from_part = m.group(1)
+
+    # Remove anything inside parentheses to avoid counting subquery FROMs as sources here
+    # (we already score subqueries separately via SELECT count)
+    from_part_no_parens = re.sub(r"\([^()]*\)", " ", from_part)
+
+    # Implicit joins: tables separated by commas
+    comma_sources = 0
+    if from_part_no_parens.strip():
+        comma_sources = from_part_no_parens.count(",") + 1
+
+    # Explicit joins: each JOIN introduces another source
+    join_sources = len(re.findall(r"\bJOIN\b", from_part_no_parens))
+
+    # If JOIN syntax is used, sources are typically (1 + #JOIN)
+    # If comma syntax is used, sources are (1 + #commas)
+    # If both appear (rare), take the max to be safe.
+    return max(comma_sources, 1 + join_sources if join_sources > 0 else 0)
+
+def sql_difficulty_1to4(sql: str) -> int:
+    s = sql.upper()
+
+    # core complexity signals
+    selects = len(re.findall(r"\bSELECT\b", s))
+    subqueries = max(0, selects - 1)
+
+    has_group = "GROUP BY" in s
+    has_having = "HAVING" in s
+    has_set_ops = any(op in s for op in ("UNION", "INTERSECT", "EXCEPT"))
+
+    sources = _count_from_sources(s)  # implicit/explicit join proxy
+
+    # Difficulty 4
+    if has_set_ops or subqueries >= 2 or sources >= 4:
+        return 4
+
+    # Difficulty 3
+    if subqueries == 1 or has_having or sources == 3:
+        return 3
+
+    # Difficulty 2
+    if has_group or sources == 2:
+        return 2
+
+    # Difficulty 1
+    return 1
+
+
+def get_difficulty(entry: dict, sentence: dict) -> int:
+    """
+    Return difficulty score in {1,2,3,4}.
+    Always defined.
+    Priority:
+      1) sentence["difficulty"]
+      2) entry["difficulty"]
+      3) derived from gold SQL structure
+    """
+
+    # Dataset-provided difficulty (preferred)
+    if isinstance(sentence, dict) and "difficulty" in sentence:
+        return int(sentence["difficulty"])
+    if isinstance(entry, dict) and "difficulty" in entry:
+        return int(entry["difficulty"])
+
+    # Derive from SQL
+    sql_list = entry.get("sql", [])
+
+    if not sql_list:
+        return 1  # default to easiest if no SQL
+    return sql_difficulty_1to4(str(sql_list[0]))
+
 
 
 # ----------------------------
@@ -408,12 +479,8 @@ def main() -> int:
                     "pred_sql_raw": pred_sql_raw,
                     "pred_sql": pred_sql,
                     "gen_time_s": round(gen_time_s, 6),
+                    "difficulty": difficulty,
                 }
-
-                if sql_variants:
-                    record["gold_sql_variants"] = sql_variants
-                if difficulty is not None:
-                    record["difficulty"] = difficulty
 
                 # Execution results (namespaced)
                 record.update(pack_exec_fields(f"{rdbms}_pred", pred_res))
