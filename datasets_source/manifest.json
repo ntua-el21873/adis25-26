@@ -1,0 +1,65 @@
+{
+  "generated_at_epoch": 1769700697,
+  "datasets": [
+    {
+      "name": "advising",
+      "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/advising.json",
+      "description": "205 queries, 15 tables",
+      "file": "datasets_source/data/advising.json",
+      "mode": "downloaded",
+      "total": 205,
+      "keys": [
+        "query-split",
+        "sentences",
+        "sql",
+        "variables"
+      ]
+    },
+    {
+      "name": "atis",
+      "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/atis.json",
+      "description": "947 queries, 25 tables",
+      "file": "datasets_source/data/atis.json",
+      "mode": "downloaded",
+      "total": 947,
+      "keys": [
+        "comments",
+        "old-name",
+        "query-split",
+        "sentences",
+        "sql",
+        "variables"
+      ]
+    },
+    {
+      "name": "imdb",
+      "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/imdb.json",
+      "description": "89 queries, 16 tables",
+      "file": "datasets_source/data/imdb.json",
+      "mode": "downloaded",
+      "total": 89,
+      "keys": [
+        "difficulty",
+        "query-split",
+        "sentences",
+        "sql",
+        "variables"
+      ]
+    },
+    {
+      "name": "yelp",
+      "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/yelp.json",
+      "description": "110 queries, 7 tables",
+      "file": "datasets_source/data/yelp.json",
+      "mode": "downloaded",
+      "total": 110,
+      "keys": [
+        "difficulty",
+        "query-split",
+        "sentences",
+        "sql",
+        "variables"
+      ]
+    }
+  ]
+}
