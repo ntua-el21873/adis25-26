@@ -54,6 +54,7 @@ try {
     exit 1
 }
 
+# TODO: isn't this unnecessary?
 # ----------------------------
 # Step 2: Create directory structure
 # ----------------------------
@@ -70,7 +71,6 @@ $directories = @(
     "models",
     "scripts",
     "results",
-    "notebooks",
     "docs\figures"
 )
 
@@ -123,7 +123,6 @@ Write-Host "Step 4: Setting up Python virtual environment..." -ForegroundColor Y
 
 $venvPath = "venv"
 $venvPython = Join-Path $venvPath "Scripts\python.exe"
-$venvPip    = Join-Path $venvPath "Scripts\pip.exe"
 
 if (!(Test-Path $venvPython)) {
     & python3 -m venv $venvPath
@@ -141,23 +140,12 @@ Ok "pip upgraded"
 Write-Host ""
 Write-Host "Step 4b: Installing Python dependencies..." -ForegroundColor Yellow
 
-$packages = @(
-    "pymysql",
-    "sqlalchemy",
-    "pandas",
-    "python-dotenv",
-    "requests",
-    "tqdm"
-)
-
 if (Test-Path "requirements.txt") {
-    Info "Installing from requirements.txt (recommended for reproducibility)..."
+    Info "Installing from requirements.txt..."
     & $venvPython -m pip install -r requirements.txt
     Ok "Installed dependencies from requirements.txt"
 } else {
-    Warn "requirements.txt not found. Installing minimal deps..."
-    & $venvPython -m pip install @packages
-    Ok "Installed minimal dependencies"
+    Warn "requirements.txt not found"
 }
 
 # ----------------------------
@@ -166,20 +154,20 @@ if (Test-Path "requirements.txt") {
 Write-Host ""
 Write-Host "Step 5: Downloading text2sql datasets..." -ForegroundColor Yellow
 
-if (Test-Path "scripts\download_datasets.py") {
+if (Test-Path "scripts\setup\download_datasets.py") {
     Info "Running download_datasets.py..."
-    & $venvPython scripts\download_datasets_copy.py
+    & $venvPython scripts\setup\download_datasets.py
     Ok "Datasets download step complete"
 } else {
-    Warn "scripts\download_datasets.py not found, skipping..."
+    Warn "scripts\setup\download_datasets.py not found, skipping..."
 }
 
 
 # ----------------------------
-# Step 7.a: Start Docker containers
+# Step 6.a: Start Docker containers
 # ----------------------------
 Write-Host ""
-Write-Host "Step 7: Starting Docker containers..." -ForegroundColor Yellow
+Write-Host "Step 6.a: Starting Docker containers..." -ForegroundColor Yellow
 
 # Start Docker services
 try {
@@ -195,10 +183,10 @@ try {
 }
 
 # ----------------------------
-# Step 7.b: Wait for healthchecks
+# Step 6.b: Wait for healthchecks
 # ----------------------------
 Write-Host ""
-Write-Host "Step 7: Waiting for databases to become healthy..." -ForegroundColor Yellow
+Write-Host "Step 6.b: Waiting for databases to become healthy..." -ForegroundColor Yellow
 
 
 function Get-ContainerHealth($name) {
@@ -255,17 +243,17 @@ while ($true) {
 }
 
 # ----------------------------
-# Step 6: Extract schemas
+# Step 7: Extract schemas
 # ----------------------------
 Write-Host ""
-Write-Host "Step 6: Extracting database schemas..." -ForegroundColor Yellow
+Write-Host "Step 7: Extracting database schemas..." -ForegroundColor Yellow
 
-if (Test-Path "scripts\extract_schemas.py") {
+if (Test-Path "scripts\setup\extract_schemas.py") {
     Info "Running extract_schemas.py..."
-    & $venvPython scripts\extract_schemas_copy.py
+    & $venvPython scripts\setup\extract_schemas_copy.py
     Ok "Database schema extraction complete"
 } else {
-    Warn "scripts\extract_schemas.py not found, skipping..."
+    Warn "scripts\setup\extract_schemas.py not found, skipping..."
 }
 
 
@@ -275,10 +263,10 @@ if (Test-Path "scripts\extract_schemas.py") {
 Write-Host ""
 Write-Host "Step 8: Testing database connections..." -ForegroundColor Yellow
 
-if (Test-Path "scripts\test_connections.py") {
-    & $venvPython scripts\test_connections.py
+if (Test-Path "scripts\setup\test_connections.py") {
+    & $venvPython scripts\setup\test_connections.py
 } else {
-    Warn "\scripts\test_connections.py not found, skipping..." -ForegroundColor Yellow
+    Warn "\scripts\setup\test_connections.py not found, skipping..." -ForegroundColor Yellow
 }
 
 # ----------------------------
@@ -296,6 +284,6 @@ Write-Host "   phpMyAdmin: http://localhost:8080" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor White
 Write-Host "   1. Open phpMyAdmin to verify databases" -ForegroundColor Gray
-Write-Host "   2. Run: python scripts\test_connections.py" -ForegroundColor Gray
+Write-Host "   2. Run: python scripts\setup\test_connections.py" -ForegroundColor Gray
 Write-Host "   3. Start working on LLM integration" -ForegroundColor Gray
 Write-Host ""
