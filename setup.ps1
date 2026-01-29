@@ -250,7 +250,7 @@ Write-Host "Step 7: Extracting database schemas..." -ForegroundColor Yellow
 
 if (Test-Path "scripts\setup\extract_schemas.py") {
     Info "Running extract_schemas.py..."
-    & $venvPython scripts\setup\extract_schemas_copy.py
+    & $venvPython scripts\setup\extract_schemas.py
     Ok "Database schema extraction complete"
 } else {
     Warn "scripts\setup\extract_schemas.py not found, skipping..."
