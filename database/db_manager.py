@@ -21,11 +21,10 @@ class DatabaseManager:
 
     # Dataset database mapping
     DATASET_DATABASES = {
-        "academic": "academic",
+        "advising": "advising",
+        "atis": "atis",
         "imdb": "imdb",
         "yelp": "yelp",
-        "geography": "geography",
-        "restaurants": "restaurants",
     }
 
     def __init__(self, db_type, database=None):

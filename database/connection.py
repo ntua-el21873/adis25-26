@@ -19,9 +19,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
-# Ensure pymysql is available for the mysql+pymysql dialect
-import pymysql  # noqa: F401  # imported for its side-effect
-
 
 # --- Load environment variables ------------------------------------------------
 
@@ -43,7 +40,7 @@ def _build_mysql_url(database: str | None) -> str:
     """Build SQLAlchemy URL for MySQL."""
     user = os.getenv("MYSQL_USER", "text2sql_user")
     password = os.getenv("MYSQL_PASSWORD", "text2sql_pass")
-    host = os.getenv("MYSQL_HOST", "localhost")
+    host = os.getenv("MYSQL_HOST", "127.0.0.1")
     port = os.getenv("MYSQL_PORT", "3306")
     db_name = database or os.getenv("MYSQL_DATABASE", "text2sql_db")
 
@@ -54,7 +51,7 @@ def _build_mariadb_url(database: str | None) -> str:
     """Build SQLAlchemy URL for MariaDB (via MySQL protocol)."""
     user = os.getenv("MARIADB_USER", "text2sql_user")
     password = os.getenv("MARIADB_PASSWORD", "text2sql_pass")
-    host = os.getenv("MARIADB_HOST", "localhost")
+    host = os.getenv("MARIADB_HOST", "127.0.0.1")
     # In your docker-compose, MariaDB is mapped to 3307 on the host
     port = os.getenv("MARIADB_PORT", "3307")
     db_name = database or os.getenv("MARIADB_DATABASE", "text2sql_db")
