@@ -22,7 +22,7 @@ CONTAINERS = {
 # Where to cache downloaded SQL assets
 # -----------------------------
 CACHE_DIR = Path("data/source_sql")
-SCHEMA_OUT_DIR = Path("data/processed/schemas")
+SCHEMA_OUT_DIR = Path("data/processed/DDL")
 
 # -----------------------------
 # SQL dump sources
@@ -35,30 +35,22 @@ DATASET_SQL_SOURCES: Dict[str, Dict] = {
         "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/refs/heads/master/data/advising-db.sql",
         "out_name": "advising.sql",
     },
-
     "atis": {
         "type": "direct_sql",
         "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/refs/heads/master/data/atis-db.sql",
         "out_name": "atis.sql",
     },
-
-
-    # TODO: add more datasets here
-    # download .tgz from drive (https://drive.google.com/file/d/11qRUfkEVj7Lapa9ypPfwrDGUFsJRsVx9/view?usp=sharing)
-    # extract all .sql files
-    # and pick the right one for each dataset
-    # Example: zip with members (e.g., Google Drive zip)
-    # "academic": {
-    #     "type": "zip",
-    #     "url": "https://example.com/mas_imdb_yelp.zip",
-    #     "zip_name": "mas_imdb_yelp.zip",
-    #     "member": "academic-db.sql",
-    #     "out_name": "academic.sql",
-    # },
+    "imdb": {
+        "type": "local_sql",
+        "path": "data/source_sql/IMDB.database.sql",
+    },
+    "yelp": {
+        "type": "local_sql",
+        "path": "data/source_sql/YELP.database.sql",
+    },
 }
 
-# If user doesn't specify, these are the usual LLMSQL3 datasets
-DEFAULT_DATASETS = ["academic", "imdb", "yelp", "advising", "atis"]
+DEFAULT_DATASETS = ["advising", "atis", "imdb", "yelp"]
 
 
 @dataclass
@@ -111,32 +103,12 @@ def resolve_sql_asset(dataset: str, force_download: bool) -> Optional[Path]:
         out_name = src.get("out_name", f"{dataset}.sql")
         return download_file(url, CACHE_DIR / out_name, force=force_download)
 
-    if typ == "zip":
-        url = src["url"]
-        zip_name = src.get("zip_name", f"{dataset}.zip")
-        member = src["member"]
-        out_name = src.get("out_name", f"{dataset}.sql")
-
-        zip_path = download_file(url, CACHE_DIR / zip_name, force=force_download)
-
-        # Extract single member
-        out_path = CACHE_DIR / out_name
-        if out_path.exists() and not force_download:
-            print(f"📦 Using cached extracted SQL: {out_path}")
-            return out_path
-
-        print(f"🗜️  Extracting '{member}' from {zip_path.name}")
-        with zipfile.ZipFile(zip_path, "r") as z:
-            if member not in z.namelist():
-                raise RuntimeError(
-                    f"Member '{member}' not found in zip. Available: {z.namelist()[:20]}..."
-                )
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            with z.open(member) as src_f, out_path.open("wb") as dst_f:
-                dst_f.write(src_f.read())
-
-        print(f"✅ Extracted: {out_path}")
-        return out_path
+    if typ == "local_sql":
+        p = Path(src["path"])
+        if not p.exists():
+            raise FileNotFoundError(f"Local SQL not found: {p}")
+        print(f"📦 Using local SQL: {p}")
+        return p
 
     raise ValueError(f"Unknown SQL source type: {typ}")
 
@@ -147,14 +119,22 @@ def docker_mysql_exec(db_type: str, creds: DbCreds, sql: str) -> None:
     # mysql client exists in both mysql and mariadb images
     client = "mysql" if db_type == "mysql" else "mariadb"
     cmd = [
-    "docker", "exec", "-i", container,
-    client, "-uroot", f"-p{creds.root_password}",
-    "-e", sql
+        "docker",
+        "exec",
+        "-i",
+        container,
+        client,
+        "-uroot",
+        f"-p{creds.root_password}",
+        "-e",
+        sql,
     ]
     run(cmd)
 
 
-def docker_mysql_import_file(db_type: str, creds: DbCreds, dataset_db: str, sql_file: Path) -> None:
+def docker_mysql_import_file(
+    db_type: str, creds: DbCreds, dataset_db: str, sql_file: Path
+) -> None:
     """
     Import a .sql file into a specific database using docker exec + mysql stdin.
     We call: mysql -uroot -p... <db> < file.sql
@@ -162,8 +142,14 @@ def docker_mysql_import_file(db_type: str, creds: DbCreds, dataset_db: str, sql_
     container = CONTAINERS[db_type]
     client = "mysql" if db_type == "mysql" else "mariadb"
     cmd = [
-    "docker", "exec", "-i", container,
-    client, "-uroot", f"-p{creds.root_password}", dataset_db
+        "docker",
+        "exec",
+        "-i",
+        container,
+        client,
+        "-uroot",
+        f"-p{creds.root_password}",
+        dataset_db,
     ]
     run(cmd, input_path=sql_file)
 
@@ -174,8 +160,9 @@ def ensure_db(db_type: str, creds: DbCreds, db_name: str, reset: bool) -> None:
         docker_mysql_exec(db_type, creds, f"DROP DATABASE IF EXISTS `{db_name}`;")
     print(f"🛠️  Creating database '{db_name}' on {db_type} (if not exists)")
     docker_mysql_exec(
-        db_type, creds,
-        f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+        db_type,
+        creds,
+        f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;",
     )
 
 
@@ -191,14 +178,62 @@ def extract_schema_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
 
     dump = "mysqldump" if db_type == "mysql" else "mariadb-dump"
     cmd = [
-    "docker", "exec", "-i", container,
-    dump, "-uroot", f"-p{creds.root_password}",
-    "--no-data", "--routines", "--triggers",
-    db_name
+        "docker",
+        "exec",
+        "-i",
+        container,
+        dump,
+        "-uroot",
+        f"-p{creds.root_password}",
+        "--no-data",
+        "--routines",
+        "--triggers",
+        "--skip-comments",
+        db_name,
     ]
 
-
     print(f"🧾 Writing schema snapshot: {out_path}")
+    with out_path.open("wb") as f:
+        subprocess.run(cmd, check=True, stdout=f)
+
+
+def extract_data_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
+    """
+    Dump data-only (no schema) using mysqldump/mariadb-dump.
+    This produces INSERT statements for all rows (DML snapshot).
+    """
+    container = CONTAINERS[db_type]
+    out_dir = Path("data/processed/DML") / db_type
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{db_name}.data.sql"
+
+    dump = "mysqldump" if db_type == "mysql" else "mariadb-dump"
+
+    # --no-create-info: no CREATE TABLE, only data
+    # --skip-triggers: avoid trigger statements in "data dump"
+    # --skip-add-drop-table: keep it data-only and clean
+    # --single-transaction: consistent snapshot (InnoDB)
+    # --quick: stream rows
+    # --default-character-set: avoid encoding surprises
+    cmd = [
+        "docker",
+        "exec",
+        "-i",
+        container,
+        dump,
+        "-uroot",
+        f"-p{creds.root_password}",
+        "--no-create-info",
+        "--skip-triggers",
+        "--skip-add-drop-table",
+        "--single-transaction",
+        "--quick",
+        "--default-character-set=utf8mb4",
+        "--skip-comments",
+        db_name,
+    ]
+
+    print(f"🧾 Writing data snapshot: {out_path}")
     with out_path.open("wb") as f:
         subprocess.run(cmd, check=True, stdout=f)
 
@@ -206,12 +241,38 @@ def extract_schema_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
 def main() -> int:
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Download SQL dumps (if available), import into MySQL/MariaDB, and extract schema snapshots.")
-    parser.add_argument("--datasets", nargs="+", default=DEFAULT_DATASETS, help="Dataset DBs to import (default: academic imdb yelp)")
-    parser.add_argument("--only", choices=["mysql", "mariadb"], default=None, help="Only run for one RDBMS")
-    parser.add_argument("--reset-db", action="store_true", help="Drop dataset DBs before importing")
-    parser.add_argument("--force-download", action="store_true", help="Redownload SQL assets even if cached")
-    parser.add_argument("--no-schema-dump", action="store_true", help="Skip schema snapshot extraction")
+    parser = argparse.ArgumentParser(
+        description="Download SQL dumps (if available), import into MySQL/MariaDB, and extract schema snapshots."
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=DEFAULT_DATASETS,
+        help="Dataset DBs to import (default: academic imdb yelp)",
+    )
+    parser.add_argument(
+        "--only",
+        choices=["mysql", "mariadb"],
+        default=None,
+        help="Only run for one RDBMS",
+    )
+    parser.add_argument(
+        "--reset-db", action="store_true", help="Drop dataset DBs before importing"
+    )
+    parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Redownload SQL assets even if cached",
+    )
+    parser.add_argument(
+        "--no-schema-dump", action="store_true", help="Skip schema snapshot extraction"
+    )
+    parser.add_argument(
+        "--no-data-dump",
+        action="store_true",
+        help="Skip data-only (DML) snapshot extraction",
+    )
+
     args = parser.parse_args()
 
     # Root passwords from .env
@@ -252,6 +313,9 @@ def main() -> int:
 
             if not args.no_schema_dump:
                 extract_schema_snapshot(db_type, creds, dataset)
+            if not args.no_data_dump:
+                extract_data_snapshot(db_type, creds, dataset)
+
 
     print("\n✅ Done.")
     return 0
