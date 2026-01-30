@@ -1,17 +1,12 @@
 """
 scripts/run_qwen_baseline.py
 
-Run a full reproducible Text2SQL baseline using the local Qwen Agent.
-Functionally equivalent to run_gpt2xl_baseline.py for fair comparison.
+Research-grade Qwen Text2SQL runner.
+Functionally IDENTICAL to run_gpt2xl_baseline.py for fair comparison.
 
-Features:
-- Executes BOTH Predicted SQL and Gold SQL
-- Calculates Accuracy (Pred Result == Gold Result)
-- Handles Dataset Splits (Easy/Medium/Hard)
-
-Adds:
-  --rdbms mysql|mariadb|both
-  Output file name auto-derived per dataset + rdbms, saved under results/
+Differences from GPT-2 script:
+- Removed prompt truncation logic (Qwen context window is large enough).
+- Uses QwenAgent instead of GPT2XLAgent.
 """
 
 import argparse
@@ -20,307 +15,235 @@ import sys
 import time
 from pathlib import Path
 
-# Add project root to path
+# Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.qwen_agent import QwenAgent
 from database.db_manager import DatabaseManager
-from scripts.sql_utils import fill_gold_sql, normalize_pred_sql, compare_results
+# We import the exact same utils as the GPT-2 baseline
+from scripts.sql_utils import (
+    fill_gold_sql, 
+    compare_results, 
+    repair_pred_table_names
+)
 
 # -----------------------------------------------------------------------------
-# Helper Functions 
+# Helper Functions (Mirrored from run_gpt2xl_baseline.py)
 # -----------------------------------------------------------------------------
-def get_query_split(entry: dict) -> str:
-    return str(entry.get("query-split", ""))
-
-def get_sql_variants(entry: dict) -> list[str]:
-    sql_list = entry.get("sql", [])
-    if isinstance(sql_list, list):
-        return [str(x) for x in sql_list]
-    return [str(sql_list)] if sql_list else []
-
-def iter_sentences(entry: dict):
-    sentences = entry.get("sentences", [])
-    if not isinstance(sentences, list):
-        return
-    for s in sentences:
-        if isinstance(s, dict):
-            yield s
-
-def get_sentence_text(sentence: dict) -> str:
-    return str(sentence.get("text", ""))
-
-def get_question_split(sentence: dict) -> str:
-    return str(sentence.get("question-split", ""))
-
-def get_sentence_variables(sentence: dict) -> dict:
-    vars_map = sentence.get("variables", {})
-    return vars_map if isinstance(vars_map, dict) else {}
 
 def load_dataset(path: Path) -> list[dict]:
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset not found: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError(f"Dataset JSON must be a list, got: {type(data)}")
     return data
 
-def _default_out_path(dataset_name: str, rdbms: str) -> Path:
-    # results/qwen_baseline_<dataset>_<rdbms>.jsonl
-    return Path("results") / f"qwen_baseline_{dataset_name}_{rdbms}.jsonl"
+def load_schema_from_file(dataset_name: str, rdbms: str) -> str:
+    """
+    Reads the pre-processed CREATE TABLE statements.
+    """
+    root = Path(__file__).resolve().parent.parent
+    schema_path = root / "data" / "processed" / "schemas" / rdbms / f"{dataset_name}.schema.sql"
+    
+    if not schema_path.exists():
+        # Fallback to mysql if mariadb specific file missing
+        fallback = root / "data" / "processed" / "schemas" / "mysql" / f"{dataset_name}.schema.sql"
+        if fallback.exists():
+            return fallback.read_text(encoding="utf-8")
+        print(f"⚠️ Schema not found: {schema_path}")
+        return ""
+    
+    return schema_path.read_text(encoding="utf-8")
 
-def _pack_exec_result(res: dict | None):
+def pack_exec_fields(prefix: str, res: dict | None) -> dict:
+    """
+    Flattens execution results into the specific JSON format required by metrics.
+    Matches GPT-2 baseline implementation exactly.
+    """
     if res is None:
-        return None
+        return {
+            f"{prefix}_success": False,
+            f"{prefix}_error_msg": "Not executed",
+            f"{prefix}_time_s": 0.0,
+            f"{prefix}_rows": 0
+        }
     return {
-        "success": res.get("success"),
-        "execution_time_s": res.get("execution_time"),
-        "rows": res.get("rows_affected"),
-        "error": res.get("error"),
+        f"{prefix}_success": bool(res.get("success", False)),
+        f"{prefix}_error_msg": str(res.get("error", "") or "") if res.get("error") else None,
+        f"{prefix}_time_s": res.get("execution_time", 0.0),
+        f"{prefix}_rows": res.get("rows_affected", 0)
     }
 
-def _results_match(res_a: dict | None, res_b: dict | None) -> bool | None:
-    """
-    Return:
-      - True/False if both succeeded and have DataFrame results (Accuracy Check)
-      - None if not comparable
-    """
-    if not res_a or not res_b:
-        return None
-    if not res_a.get("success") or not res_b.get("success"):
-        return None
-
-    df_a = res_a.get("result")
-    df_b = res_b.get("result")
-    if df_a is None or df_b is None:
-        return None
-
-    return compare_results(df_a, df_b)
+def fill_question_text(text: str, variables: dict) -> str:
+    """Substitute variables into the question text (e.g. number0 -> 100)."""
+    out = text
+    for k, v in variables.items():
+        out = out.replace(k, str(v))
+    return out
 
 # -----------------------------------------------------------------------------
-# Main Execution Loop
+# Main Execution
 # -----------------------------------------------------------------------------
-def main() -> int:
+
+def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="datasets_source/data/advising.json",
-        help="Path to dataset JSON file (text2sql-data format).",
-    )
-    parser.add_argument(
-        "--rdbms",
-        type=str,
-        default="mysql",
-        choices=["mysql", "mariadb", "both"],
-        help="RDBMS to use for execution.",
-    )
-    parser.add_argument(
-        "--limit_entries",
-        type=int,
-        default=5,
-        help="Process only the first N entries.",
-    )
-    parser.add_argument(
-        "--max_tables",
-        type=int,
-        default=12,
-        help="Max tables to include in compact schema.",
-    )
-    parser.add_argument(
-        "--out",
-        type=str,
-        default="",
-        help="Optional output JSONL path.",
-    )
+    parser.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON")
+    parser.add_argument("--rdbms", type=str, default="mysql", choices=["mysql", "mariadb"])
+    parser.add_argument("--limit", type=int, default=0, help="Max entries to process (0=all)")
+    parser.add_argument("--out", type=str, default="", help="Custom output path")
     args = parser.parse_args()
 
+    # 1. Setup Paths & Data
     dataset_path = Path(args.dataset)
-    if not dataset_path.exists():
-        print(f"❌ Dataset not found: {dataset_path}")
-        return 1
-
     dataset_name = dataset_path.stem
-
-    # Decide output path
-    if args.out.strip():
+    
+    if args.out:
         out_path = Path(args.out)
     else:
-        out_path = _default_out_path(dataset_name, args.rdbms)
-
+        out_path = Path("results") / f"qwen_baseline_{dataset_name}_{args.rdbms}.jsonl"
+    
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    print("🧪 Qwen (Local) Text2SQL Baseline Runner")
-    print("=" * 70)
-    print(f"Dataset file: {dataset_path}")
-    print(f"Dataset name (DB): {dataset_name}")
-    print(f"RDBMS: {args.rdbms}")
-    print(f"Output: {out_path}")
-    print(f"Entry limit: {args.limit_entries}")
-    print("=" * 70)
 
-    data = load_dataset(dataset_path)
+    print(f"🚀 Qwen Baseline | DB: {dataset_name} | RDBMS: {args.rdbms}")
+    print(f"   Output: {out_path}")
 
-    # Initialize Agent
-    agent = QwenAgent()
+    try:
+        data = load_dataset(dataset_path)
+    except Exception as e:
+        print(f"❌ Failed to load dataset: {e}")
+        return 1
 
-    # Initialize Databases
-    mysql_for_schema = DatabaseManager("mysql")
-    mysql_db = None
-    maria_db = None
+    # 2. Initialize Components
+    agent = QwenAgent() 
+    db_manager = DatabaseManager(args.rdbms)
+    
+    # Load Schema Text
+    schema_text = load_schema_from_file(dataset_name, args.rdbms)
+    
+    # Get table names for normalization/repair (Crucial for fairness)
+    real_tables = db_manager.get_table_names(dataset_name)
+    schema_num_tables = len(real_tables)
 
-    if args.rdbms in ("mysql", "both"):
-        mysql_db = DatabaseManager("mysql")
-    if args.rdbms in ("mariadb", "both"):
-        maria_db = DatabaseManager("mariadb")
-
-    # Counters
     row_id = 0
-    n_ok_mysql = 0
-    n_ok_maria = 0
-    n_both_ok = 0
-    n_match = 0 # Cross-DB match count
+    questions_processed = 0
 
+    # 3. Processing Loop
     with out_path.open("w", encoding="utf-8") as f:
-        for entry in data[: args.limit_entries]:
-            query_split = get_query_split(entry)
-            sql_variants = get_sql_variants(entry)
+        for entry in data:
+            # Metadata
+            query_split = entry.get("query-split", "")
+            difficulty = entry.get("difficulty", "unknown")
+            sql_variants = entry.get("sql", [])
+            if not isinstance(sql_variants, list):
+                sql_variants = [str(sql_variants)]
             gold_sql_first = sql_variants[0] if sql_variants else ""
 
-            for sentence in iter_sentences(entry):
-                question_text = get_sentence_text(sentence)
-                question_split = get_question_split(sentence)
-                question_vars = get_sentence_variables(sentence)
+            # Iterate over paraphrases (sentences) - EXACTLY as GPT-2 does
+            sentences = entry.get("sentences", [])
+            for sentence in sentences:
+                question_text = sentence.get("text", "")
+                variables = sentence.get("variables", {})
+                question_split = sentence.get("question-split", "")
+                
+                # Filled question
+                question_text_filled = fill_question_text(question_text, variables)
 
-                # A. Get Schema
-                schema_compact = mysql_for_schema.get_compact_schema(
-                    database=dataset_name,
-                    question=question_text,
-                    max_tables=args.max_tables,
-                )
+                # --- A. GENERATION ---
+                print(f"[{row_id}] Generating...", end=" ", flush=True)
+                t0 = time.time()
+                
+                try:
+                    # Expecting tuple (sql, prompt_tokens, completion_tokens)
+                    pred_sql_raw, p_tokens, c_tokens = agent.generate_sql(schema_text, question_text)
+                except Exception as e:
+                    print(f"Gen Error: {e}")
+                    pred_sql_raw = "SELECT 1;"
+                    p_tokens, c_tokens = 0, 0
+                
+                gen_time_s = time.time() - t0
 
-                # B. Prepare Gold SQL (The Correct Answer)
+                # --- B. NORMALIZATION & REPAIR ---
+                # Apply the EXACT same repair logic as GPT-2 to ensure fair scoring
+                pred_sql_fixed, pred_repairs = repair_pred_table_names(pred_sql_raw, real_tables)
+
+                # Prepare Gold SQL for execution
                 gold_sql_exec = fill_gold_sql(entry, sentence)
 
-                # C. Generate Prediction
-                # Note: QwenAgent handles max_new_tokens internally (hardcoded to 256)
-                t0 = time.time()
-                pred_sql_raw = agent.generate_sql(schema_compact, question_text)
-                gen_time = time.time() - t0
-
-                # Normalize 
-                schema_tables = mysql_for_schema.get_table_names(database=dataset_name)
-                pred_sql = normalize_pred_sql(pred_sql_raw, schema_tables)
-
-                # D. Execute Pred vs Gold
-                mysql_pred = mysql_gold = None
-                maria_pred = maria_gold = None
-
-                # --- MySQL Execution ---
-                if mysql_db:
-                    mysql_db.switch_database(dataset_name)
-                    mysql_pred = mysql_db.execute_query(pred_sql)
-                    mysql_gold = mysql_db.execute_query(gold_sql_exec)
-
-                    if mysql_pred.get("success"):
-                        n_ok_mysql += 1
-
-                # --- MariaDB Execution ---
-                if maria_db:
-                    maria_db.switch_database(dataset_name)
-                    maria_pred = maria_db.execute_query(pred_sql)
-                    maria_gold = maria_db.execute_query(gold_sql_exec)
-
-                    if maria_pred.get("success"):
-                        n_ok_maria += 1
-
-                # E. Compare Results (Pred vs Gold) - Accuracy
-                mysql_exec_match = _results_match(mysql_pred, mysql_gold)
-                maria_exec_match = _results_match(maria_pred, maria_gold)
-
-                # F. Cross-RDBMS Comparison (Only if running BOTH)
-                match = None
-                if mysql_pred and maria_pred:
-                    if mysql_pred.get("success") and maria_pred.get("success"):
-                        n_both_ok += 1
-                        if mysql_pred.get("result") is not None and maria_pred.get("result") is not None:
-                            match = compare_results(mysql_pred["result"], maria_pred["result"])
-                            if match:
-                                n_match += 1
-
-                # Logging
-                # Status: OK/FAIL (Execution)
-                # Accuracy: ✔/✘ (Correctness vs Gold)
-                ms = "-"
-                ma = "-"
-                if mysql_pred:
-                    ms = "OK" if mysql_pred.get("success") else "FAIL"
-                    ma = "✔" if mysql_exec_match else ("✘" if mysql_exec_match is not None else "-")
-
-                marias = "-"
-                mariaa = "-"
-                if maria_pred:
-                    marias = "OK" if maria_pred.get("success") else "FAIL"
-                    mariaa = "✔" if maria_exec_match else ("✘" if maria_exec_match is not None else "-")
+                # --- C. EXECUTION ---
+                db_manager.switch_database(dataset_name)
                 
-                print(f"[{row_id}] qsplit={query_split or '-'} mysql={ms}/{ma} maria={marias}/{mariaa}")
+                # Execute Prediction
+                pred_res = db_manager.execute_query(pred_sql_fixed)
+                
+                # Execute Gold
+                gold_res = db_manager.execute_query(gold_sql_exec)
 
-                # G. Save Record
+                # --- D. COMPARISON ---
+                match = compare_results(pred_res.get("result"), gold_res.get("result"))
+
+                # --- E. RECORDING ---
+                # This dictionary structure matches run_gpt2xl_baseline.py exactly
                 record = {
                     "id": row_id,
                     "dataset": dataset_name,
+                    "llm": "qwen",
+                    "rdbms": args.rdbms,
+                    
+                    # Question Info
+                    "question_text": question_text,
+                    "question_text_filled": question_text_filled,
+                    "question_variables": variables,
                     "query_split": query_split,
                     "question_split": question_split,
-                    "question_text": question_text,
-                    "question_variables": question_vars,
+                    "difficulty": difficulty,
                     
-                    # SQLs
+                    # Gold Info
                     "gold_sql_first": gold_sql_first,
                     "gold_sql_exec": gold_sql_exec,
+                    "gold_sql_variants": sql_variants,
+                    
+                    # Schema / Prompt Info
+                    "schema_compact": schema_text[:200] + "...", 
+                    "schema_num_tables": schema_num_tables,
+                    "prompt_tokens": p_tokens,
+                    "completion_tokens": c_tokens,
+                    
+                    # Prediction Info
                     "pred_sql_raw": pred_sql_raw,
-                    "pred_sql": pred_sql,
+                    "pred_sql": pred_sql_fixed, 
+                    "pred_repairs": pred_repairs, # ADDED: Missing in previous version
+                    "gen_time_s": round(gen_time_s, 6),
                     
-                    "schema_compact": schema_compact,
-                    "rdbms_mode": args.rdbms,
-                    "gen_time_s": round(gen_time, 4),
-                    
-                    # Execution Results
-                    "mysql": _pack_exec_result(mysql_pred),
-                    "mariadb": _pack_exec_result(maria_pred),
-                    "mysql_gold": _pack_exec_result(mysql_gold),
-                    "mariadb_gold": _pack_exec_result(maria_gold),
-                    
-                    # Accuracy Booleans
-                    "mysql_pred_vs_gold_match": mysql_exec_match,
-                    "mariadb_pred_vs_gold_match": maria_exec_match,
-                    
-                    # Cross-DB Match
-                    "mysql_vs_mariadb_match": match
+                    # Comparison Result
+                    f"{args.rdbms}_pred_vs_gold_match": bool(match)
                 }
-                
+
+                # Flatten execution results
+                record.update(pack_exec_fields(f"{args.rdbms}_pred", pred_res))
+                record.update(pack_exec_fields(f"{args.rdbms}_gold", gold_res))
+
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+                # Console Feedback (Formatted like GPT-2)
+                pred_ok = "OK" if pred_res.get("success") else "FAIL"
+                gold_ok = "OK" if gold_res.get("success") else "FAIL"
+                acc = "✔" if match else "✘"
+                
+                print(
+                    f"[{row_id}] qsplit={query_split or '-'} "
+                    f"pred={pred_ok} gold={gold_ok} ex={acc} "
+                    f"tables={schema_num_tables} prompt_tokens={p_tokens}"
+                )
+
                 row_id += 1
-
-    # Cleanup
-    mysql_for_schema.close()
-    if mysql_db: mysql_db.close()
-    if maria_db: maria_db.close()
-
-    print("\n" + "=" * 70)
-    print("📊 Summary")
-    print("=" * 70)
-    print(f"Total Questions: {row_id}")
-    
-    if args.rdbms in ("mysql", "both") and row_id > 0:
-        print(f"MySQL success rate:   {n_ok_mysql}/{row_id} ({n_ok_mysql/row_id*100:.1f}%)")
-        
-    if args.rdbms in ("mariadb", "both") and row_id > 0:
-        print(f"MariaDB success rate: {n_ok_maria}/{row_id} ({n_ok_maria/row_id*100:.1f}%)")
-        
-    if args.rdbms == "both" and row_id > 0:
-        print(f"Both succeeded:       {n_both_ok}/{row_id} ({n_both_ok/row_id*100:.1f}%)")
-        if n_both_ok > 0:
-            print(f"Result match rate:    {n_match}/{n_both_ok} ({n_match/n_both_ok*100:.1f}%)")
+                questions_processed += 1
             
-    print(f"\n✅ Wrote results to: {out_path}")
-    return 0
+            if args.limit > 0 and questions_processed >= args.limit:
+                break
+
+    db_manager.close()
+    print("\n" + "="*60)
+    print(f"Done. Processed {questions_processed} queries.")
+    print(f"Results saved to: {out_path}")
 
 if __name__ == "__main__":
     main()
