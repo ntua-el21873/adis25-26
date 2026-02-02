@@ -29,12 +29,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.gpt2xl_agent import GPT2XLAgent
 from database.db_manager import DatabaseManager
-from sql_utils import fill_gold_sql, normalize_pred_sql, compare_results, repair_pred_table_names
+from sql_utils import (
+    fill_gold_sql,
+    normalize_pred_sql,
+    compare_results,
+    repair_pred_table_names,
+    repair_pred_column_names,
+)
 
 
 # ----------------------------
 # Dataset helpers
 # ----------------------------
+
 
 def load_dataset(path: Path) -> List[dict]:
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -82,8 +89,11 @@ def _count_from_sources(sql_upper: str) -> int:
     - supports implicit joins (comma-separated)
     - supports explicit JOINs
     """
-    m = re.search(r"\bFROM\b(.*?)(\bWHERE\b|\bGROUP\s+BY\b|\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|\bINTERSECT\b|\bEXCEPT\b|;|$)",
-                  sql_upper, flags=re.DOTALL)
+    m = re.search(
+        r"\bFROM\b(.*?)(\bWHERE\b|\bGROUP\s+BY\b|\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|\bINTERSECT\b|\bEXCEPT\b|;|$)",
+        sql_upper,
+        flags=re.DOTALL,
+    )
     if not m:
         return 0
 
@@ -106,9 +116,11 @@ def _count_from_sources(sql_upper: str) -> int:
     # If both appear (rare), take the max to be safe.
     return max(comma_sources, 1 + join_sources if join_sources > 0 else 0)
 
+
 # ----------------------------
 # SQL difficulty scoring
 # ----------------------------
+
 
 def sql_difficulty_1to4(sql: str) -> int:
     s = sql.upper()
@@ -167,10 +179,17 @@ def get_difficulty(entry: dict, sentence: dict) -> int:
 # Variable substitution for question_text_filled (best-effort)
 # ----------------------------
 
+
 def build_identifier_maps(db: DatabaseManager, dataset_name: str):
+    """
+    Input: DatabaseManager + dataset name
+    Output: table_map: lowercase_table -> actual_table
+    """
     # Actual table names from DB
-    tables = db.get_table_names(database=dataset_name)  # e.g. ["airport", "flight", ...]
-    table_map = {t.lower(): t for t in tables}          # map lowercase -> actual
+    tables = db.get_table_names(
+        database=dataset_name
+    )  # e.g. ["airport", "flight", ...]
+    table_map = {t.lower(): t for t in tables}  # map lowercase -> actual
 
     # Optional: columns too, if you have/get them
     # columns = db.get_all_columns(database=dataset_name)  # you may need to add this
@@ -252,7 +271,9 @@ def parse_schema_counts(schema_compact: str) -> Tuple[int, Optional[int]]:
     return schema_num_tables, schema_num_columns
 
 
-def count_prompt_tokens_effective(agent: GPT2XLAgent, schema_compact: str, question: str, max_new_tokens: int) -> int:
+def count_prompt_tokens_effective(
+    agent: GPT2XLAgent, schema_compact: str, question: str, max_new_tokens: int
+) -> int:
     """
     EXACT prompt token count as actually fed into model, including truncation logic.
 
@@ -261,12 +282,16 @@ def count_prompt_tokens_effective(agent: GPT2XLAgent, schema_compact: str, quest
 
     This is the correct "prompt_tokens" for prompt complexity and context pressure.
     """
-    inputs = agent._make_inputs_under_limit(schema_compact, question, max_new_tokens=max_new_tokens)
+    inputs = agent._make_inputs_under_limit(
+        schema_compact, question, max_new_tokens=max_new_tokens
+    )
     # inputs["input_ids"] is shape [1, seq_len]
     return int(inputs["input_ids"].shape[1])
 
 
 _QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")")
+
+
 def normalize_table_case(sql: str, table_map: Dict[str, str]) -> str:
     """
     Replace table names in SQL to match the *actual* case in the DB.
@@ -296,9 +321,11 @@ def normalize_table_case(sql: str, table_map: Dict[str, str]) -> str:
 
     return "".join(parts)
 
+
 # ----------------------------
 # Execution result packing
 # ----------------------------
+
 
 def pack_exec_fields(prefix: str, exec_res: Optional[dict]) -> Dict[str, Any]:
     """
@@ -345,19 +372,40 @@ def pred_vs_gold_match(pred_res: Optional[dict], gold_res: Optional[dict]) -> bo
 def default_out_path(dataset_name: str, rdbms: str) -> Path:
     return Path("results") / f"gpt2xl_benchmark_{dataset_name}_{rdbms}.jsonl"
 
-
 # ----------------------------
 # Main
 # ----------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, required=True, help="Path to dataset JSON file.")
-    parser.add_argument("--rdbms", type=str, required=True, choices=["mysql", "mariadb"], help="One RDBMS per run.")
-    parser.add_argument("--limit", type=int, default=0, help="If > 0, process only first N QUESTIONS (sentences).")
-    parser.add_argument("--max_tables", type=int, default=4, help="Max tables for compact schema.")
-    parser.add_argument("--max_new_tokens", type=int, default=128, help="Max tokens to generate for SQL.")
-    parser.add_argument("--out", type=str, default="", help="Optional output JSONL path.")
+    parser.add_argument(
+        "--dataset", type=str, required=True, help="Path to dataset JSON file."
+    )
+    parser.add_argument(
+        "--rdbms",
+        type=str,
+        required=True,
+        choices=["mysql", "mariadb"],
+        help="One RDBMS per run.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="If > 0, process only first N QUESTIONS (sentences).",
+    )
+    parser.add_argument(
+        "--max_tables", type=int, default=4, help="Max tables for compact schema."
+    )
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=128,
+        help="Max tokens to generate for SQL.",
+    )
+    parser.add_argument(
+        "--out", type=str, default="", help="Optional output JSONL path."
+    )
     args = parser.parse_args()
 
     dataset_path = Path(args.dataset)
@@ -369,7 +417,9 @@ def main() -> int:
     rdbms = args.rdbms
     llm_name = "gpt2xl"
 
-    out_path = Path(args.out) if args.out.strip() else default_out_path(dataset_name, rdbms)
+    out_path = (
+        Path(args.out) if args.out.strip() else default_out_path(dataset_name, rdbms)
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print("🧪 GPT-2 XL Text2SQL Benchmark Runner")
@@ -395,6 +445,7 @@ def main() -> int:
     schema_tables = db.get_table_names(database=dataset_name)
 
     table_map = build_identifier_maps(db, dataset_name)
+    schema_map = db.get_schema_map()
     row_id = 0
     questions_processed = 0
 
@@ -421,11 +472,16 @@ def main() -> int:
                     question=question_text_filled,
                     max_tables=args.max_tables,
                 )
-                schema_num_tables, schema_num_columns = parse_schema_counts(schema_compact)
+                schema_num_tables, schema_num_columns = parse_schema_counts(
+                    schema_compact
+                )
 
                 # Exact prompt tokens as actually fed into GPT-2 (includes truncation)
                 prompt_tokens = count_prompt_tokens_effective(
-                    agent, schema_compact, question_text_filled, max_new_tokens=args.max_new_tokens
+                    agent,
+                    schema_compact,
+                    question_text_filled,
+                    max_new_tokens=args.max_new_tokens,
                 )
 
                 # Gold SQL executable (filled)
@@ -444,7 +500,11 @@ def main() -> int:
                 # Normalize prediction (table casing etc.)
                 pred_sql = normalize_pred_sql(pred_sql_raw, schema_tables)
                 pred_sql = agent.normalize_table_case(pred_sql, table_map)
-                pred_sql, pred_repairs = repair_pred_table_names(pred_sql, schema_tables)
+                pred_sql, pred_repairs = repair_pred_table_names(
+                    pred_sql, schema_tables
+                )
+                pred_sql, pred_col_repairs = repair_pred_column_names(
+                    pred_sql, schema_map)
 
                 # Execute predicted + gold
                 db.switch_database(dataset_name)
@@ -459,24 +519,20 @@ def main() -> int:
                     "dataset": dataset_name,
                     "llm": llm_name,
                     "rdbms": rdbms,
-
                     # Question & dataset metadata
                     "question_text": question_text,
                     "question_text_filled": question_text_filled,
                     "question_variables": question_vars,
                     "query_split": query_split,
                     "question_split": question_split,
-
                     # Gold SQL
                     "gold_sql_first": gold_sql_first,
                     "gold_sql_exec": gold_sql_exec,
-
                     # Schema/prompt information
                     "schema_compact": schema_compact,
                     "schema_num_tables": schema_num_tables,
                     "schema_num_columns": schema_num_columns,
                     "prompt_tokens": prompt_tokens,
-
                     # LLM output
                     "pred_sql_raw": pred_sql_raw,
                     "pred_sql": pred_sql,
@@ -492,6 +548,7 @@ def main() -> int:
                 record[f"{rdbms}_pred_vs_gold_match"] = bool(match)
 
                 record["pred_repairs"] = pred_repairs
+                record["pred_column_repairs"] = pred_col_repairs
 
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 

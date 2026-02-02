@@ -103,6 +103,247 @@ def repair_pred_table_names(sql: str, actual_tables: List[str], min_ratio: float
     return "".join(parts), changes
 
 
+# Capture FROM/JOIN table with optional AS and optional alias.
+# Examples it matches:
+#   FROM movie
+#   FROM movie m
+#   FROM movie AS m
+#   JOIN actor a
+#   JOIN actor AS a
+_TABLE_ALIAS_POS = re.compile(
+    r"""
+    \b(?:
+        from|
+        join|
+        update|
+        into|
+        delete\s+from
+    )\b
+    \s+
+    (`?)([A-Za-z_][\w]*)(`?)          # table token (group 2)
+    (?:\s+(?:as\s+)?([A-Za-z_][\w]*))?  # optional alias (group 4)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Dotted identifier: alias_or_table.column (optional backticks around each piece)
+# Examples:
+#   actor.name
+#   `actor`.`name`
+#   a.name
+#   a.`birth_year`
+_DOTTED_COL = re.compile(
+    r"""
+    (`?)([A-Za-z_][\w]*)(`?)      # left (alias/table) => group 2
+    \s*\.\s*
+    (`?)([A-Za-z_][\w]*)(`?)      # right (column)     => group 5
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+def _ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+def extract_table_alias_map(sql: str) -> Dict[str, str]:
+    """
+    Best-effort alias extraction from FROM/JOIN/etc.
+    Returns mapping: alias_or_table_token_lower -> real_table_token_lower
+
+    If no alias is present, maps table->table as well.
+    """
+    if not sql:
+        return {}
+
+    parts = _QUOTED.split(sql)
+    alias_to_table: Dict[str, str] = {}
+
+    for i in range(0, len(parts), 2):  # outside quotes
+        chunk = parts[i]
+        for m in _TABLE_ALIAS_POS.finditer(chunk):
+            table = m.group(2)
+            alias = m.group(4)
+
+            if table:
+                alias_to_table[table.lower()] = table.lower()
+            if alias:
+                alias_to_table[alias.lower()] = table.lower()
+
+    return alias_to_table
+
+def _best_col_match(
+    token: str,
+    cols: List[str],
+    min_ratio: float = 0.90
+) -> Tuple[str, float, float]:
+    """
+    Returns (best_col, best_ratio, second_best_ratio).
+    cols are real column names (case sensitive in DB, but we compare lower).
+    """
+    t = token.lower()
+
+    # exact match
+    for c in cols:
+        if c.lower() == t:
+            return c, 1.0, 0.0
+
+    # plural stripping (rare for cols but harmless)
+    if t.endswith("s"):
+        singular = t[:-1]
+        for c in cols:
+            if c.lower() == singular:
+                return c, 0.99, 0.0
+
+    scored = []
+    for c in cols:
+        r = _ratio(t, c.lower())
+        scored.append((r, c))
+    scored.sort(reverse=True, key=lambda x: x[0])
+
+    best_r, best = scored[0]
+    second_r = scored[1][0] if len(scored) > 1 else 0.0
+
+    if best_r < min_ratio:
+        return token, best_r, second_r  # no change
+    return best, best_r, second_r
+
+
+def _infer_id_abbrev(table: str) -> str | None:
+    """
+    Deterministically infer the common abbreviation key for tables like:
+      actor -> aid, movie -> mid, director -> did, writer -> wid, producer -> pid, tv_series -> sid
+    Heuristic:
+      - if table has underscores: take first letters of parts + 'id' is uncommon here,
+        but for your schema it's typically first letter of the main noun + 'id' e.g. tv_series -> sid.
+      - otherwise: first letter + 'id'
+    """
+    if not table:
+        return None
+    t = table.lower()
+    # special-case tv_series (common in your schemas)
+    if t == "tv_series":
+        return "sid"
+    # generic: first char + "id"
+    return f"{t[0]}id"
+
+def repair_pred_column_names(
+    sql: str,
+    schema_map: Dict[str, List[str]],
+    alias_to_table: Dict[str, str] | None = None,
+    min_ratio: float = 0.90,
+    min_gap: float = 0.05,
+    allow_id_abbrev: bool = True,
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """
+    Repairs predicted SQL column names ONLY in dotted positions (<alias_or_table>.<col>)
+    and ONLY outside quotes, using schema_map for table->columns.
+
+    Inputs:
+      - sql: predicted SQL string
+      - schema_map: {table: [col1, col2, ...]}
+      - alias_to_table: mapping alias->real_table (lowercased). If None, we infer from sql.
+      - min_ratio/min_gap: fuzzy match thresholds
+      - allow_id_abbrev: enable safe mapping for id-like hallucinations (actor_id -> aid, movie_id -> mid)
+
+    Returns: (new_sql, changes)
+      changes: list of dicts like:
+        {
+          "table_or_alias": "a",
+          "resolved_table": "actor",
+          "from": "actor_id",
+          "to": "aid",
+          "ratio": 1.0,
+          "method": "id_abbrev" | "exact" | "fuzzy"
+        }
+    """
+    if not sql or not schema_map:
+        return sql, []
+
+    # Normalize schema_map key access (case-insensitive)
+    schema_lut: Dict[str, List[str]] = {t.lower(): cols for t, cols in schema_map.items()}
+
+    if alias_to_table is None:
+        alias_to_table = extract_table_alias_map(sql)
+
+    parts = _QUOTED.split(sql)
+    changes: List[Dict[str, Any]] = []
+
+    for i in range(0, len(parts), 2):  # outside quotes only
+        chunk = parts[i]
+
+        def repl(m: re.Match):
+            lq1, left, lq2 = m.group(1), m.group(2), m.group(3)
+            rq1, col, rq2 = m.group(4), m.group(5), m.group(6)
+
+            left_l = left.lower()
+            col_l = col.lower()
+
+            # Resolve alias->table (fallback: treat left as table)
+            resolved_table = alias_to_table.get(left_l, left_l)
+
+            cols = schema_lut.get(resolved_table or "")
+            if not cols:
+                # Unknown table/alias -> don't touch
+                return m.group(0)
+
+            # If already valid, keep (case preserved)
+            for real_c in cols:
+                if real_c.lower() == col_l:
+                    # Optionally normalize case to schema's column casing:
+                    if real_c != col:
+                        changes.append({
+                            "table_or_alias": left,
+                            "resolved_table": resolved_table,
+                            "from": col,
+                            "to": real_c,
+                            "ratio": 1.0,
+                            "method": "exact",
+                        })
+                        return f"{lq1}{left}{lq2}.{rq1}{real_c}{rq2}"
+                    return m.group(0)
+
+            # Safe id abbreviation repair (high precision for your datasets)
+            if allow_id_abbrev:
+                # If model says actor_id / movie_id / director_id / ... or plain id
+                if col_l == "id" or col_l.endswith("_id"):
+                    inferred = _infer_id_abbrev(resolved_table or "")
+                    if inferred:
+                        # Only apply if inferred abbrev exists in this table
+                        for real_c in cols:
+                            if real_c.lower() == inferred:
+                                changes.append({
+                                    "table_or_alias": left,
+                                    "resolved_table": resolved_table,
+                                    "from": col,
+                                    "to": real_c,
+                                    "ratio": 1.0,
+                                    "method": "id_abbrev",
+                                })
+                                return f"{lq1}{left}{lq2}.{rq1}{real_c}{rq2}"
+
+            # Fuzzy match within this table's columns
+            best, best_r, second_r = _best_col_match(col, cols, min_ratio=min_ratio)
+
+            if best.lower() != col_l:
+                # ambiguity guard
+                if (best_r - second_r) < min_gap and best_r < 0.99:
+                    return m.group(0)
+
+                changes.append({
+                    "table_or_alias": left,
+                    "resolved_table": resolved_table,
+                    "from": col,
+                    "to": best,
+                    "ratio": round(best_r, 4),
+                    "method": "fuzzy",
+                })
+                return f"{lq1}{left}{lq2}.{rq1}{best}{rq2}"
+
+            return m.group(0)
+
+        chunk = _DOTTED_COL.sub(repl, chunk)
+        parts[i] = chunk
+
+    return "".join(parts), changes
 # -----------------------
 # SQL utilities
 # ----------------------
