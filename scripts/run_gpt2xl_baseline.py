@@ -106,6 +106,10 @@ def _count_from_sources(sql_upper: str) -> int:
     # If both appear (rare), take the max to be safe.
     return max(comma_sources, 1 + join_sources if join_sources > 0 else 0)
 
+# ----------------------------
+# SQL difficulty scoring
+# ----------------------------
+
 def sql_difficulty_1to4(sql: str) -> int:
     s = sql.upper()
 
@@ -159,7 +163,6 @@ def get_difficulty(entry: dict, sentence: dict) -> int:
     return sql_difficulty_1to4(str(sql_list[0]))
 
 
-
 # ----------------------------
 # Variable substitution for question_text_filled (best-effort)
 # ----------------------------
@@ -174,37 +177,6 @@ def build_identifier_maps(db: DatabaseManager, dataset_name: str):
     # col_map = {c.lower(): c for c in columns}
 
     return table_map
-
-
-_QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")")
-def normalize_table_case(sql: str, table_map: Dict[str, str]) -> str:
-    """
-    Replace table names in SQL to match the *actual* case in the DB.
-    - table_map: lowercase_table -> actual_table
-    - avoids changing inside single/double quoted strings.
-    - replaces whole tokens only.
-    """
-    if not sql:
-        return sql
-
-    parts = _QUOTED.split(sql)  # keeps delimiters
-    for i in range(0, len(parts), 2):  # only outside quotes
-        chunk = parts[i]
-
-        # Replace longest names first (airport_service before airport)
-        for key in sorted(table_map.keys(), key=len, reverse=True):
-            actual = table_map[key]
-            # token boundary: not surrounded by [A-Za-z0-9_]
-            chunk = re.sub(
-                rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])",
-                actual,
-                chunk,
-                flags=re.IGNORECASE,  # match any case in gold/pred
-            )
-
-        parts[i] = chunk
-
-    return "".join(parts)
 
 
 def fill_question_text(question_text: str, variables: Dict[str, Any]) -> str:
@@ -293,6 +265,36 @@ def count_prompt_tokens_effective(agent: GPT2XLAgent, schema_compact: str, quest
     # inputs["input_ids"] is shape [1, seq_len]
     return int(inputs["input_ids"].shape[1])
 
+
+_QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")")
+def normalize_table_case(sql: str, table_map: Dict[str, str]) -> str:
+    """
+    Replace table names in SQL to match the *actual* case in the DB.
+    - table_map: lowercase_table -> actual_table
+    - avoids changing inside single/double quoted strings.
+    - replaces whole tokens only.
+    """
+    if not sql:
+        return sql
+
+    parts = _QUOTED.split(sql)  # keeps delimiters
+    for i in range(0, len(parts), 2):  # only outside quotes
+        chunk = parts[i]
+
+        # Replace longest names first (airport_service before airport)
+        for key in sorted(table_map.keys(), key=len, reverse=True):
+            actual = table_map[key]
+            # token boundary: not surrounded by [A-Za-z0-9_]
+            chunk = re.sub(
+                rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])",
+                actual,
+                chunk,
+                flags=re.IGNORECASE,  # match any case in gold/pred
+            )
+
+        parts[i] = chunk
+
+    return "".join(parts)
 
 # ----------------------------
 # Execution result packing
@@ -441,7 +443,7 @@ def main() -> int:
 
                 # Normalize prediction (table casing etc.)
                 pred_sql = normalize_pred_sql(pred_sql_raw, schema_tables)
-                pred_sql = normalize_table_case(pred_sql, table_map)
+                pred_sql = agent.normalize_table_case(pred_sql, table_map)
                 pred_sql, pred_repairs = repair_pred_table_names(pred_sql, schema_tables)
 
                 # Execute predicted + gold

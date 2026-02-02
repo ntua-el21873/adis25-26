@@ -1,6 +1,6 @@
 import re
 import torch
-from typing import Tuple, List
+from typing import Tuple, List, Set, Dict
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -9,6 +9,15 @@ from transformers import (
 )
 
 MODEL_ID = "openai-community/gpt2-xl"
+
+# Lightweight keyword set for identifier gating (not a full SQL parser).
+SQL_KEYWORDS: Set[str] = {
+    "select", "from", "where", "join", "left", "right", "inner", "outer", "cross",
+    "on", "as", "and", "or", "not", "in", "is", "null", "like", "distinct",
+    "group", "by", "order", "having", "limit", "offset", "asc", "desc",
+    "count", "sum", "avg", "min", "max", "between", "exists", "union", "all",
+    "case", "when", "then", "else", "end"
+}
 
 
 class _SQLStoppingCriteria(StoppingCriteria):
@@ -47,6 +56,7 @@ class GPT2XLAgent:
     def __init__(self, device: str | None = None, debug: bool = False):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.debug = debug
+        self._QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")")
 
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         self.model = AutoModelForCausalLM.from_pretrained(MODEL_ID).to(self.device)
@@ -65,24 +75,23 @@ class GPT2XLAgent:
             "- End the query with a semicolon.\n"
         )
         self._mid = "\n\n### Question:\n"
-        self._suffix_template = "\n\n### SQL:\n-- Format: SELECT <columns> FROM <table> WHERE <condition>;\nSELECT "
-
+        # Keep SELECT anchor, but include a lightweight format hint (no dataset-specific example).
+        self._suffix_template = "\n\n### SQL:\nSELECT "
 
         # Pre-tokenize constant segments
         self._prefix_ids = self.tokenizer(self._prefix, add_special_tokens=False).input_ids
         self._rules_ids = self.tokenizer(self._rules, add_special_tokens=False).input_ids
         self._mid_ids = self.tokenizer(self._mid, add_special_tokens=False).input_ids
         self._suffix_ids = self.tokenizer(self._suffix_template, add_special_tokens=False).input_ids
-        
-        
 
+        # Bad phrases to reduce prompt-channel drift and known degeneracy ("ids").
         self._bad_phrases = [
             "###",
             "Database schema",
             "Question",
             "Rules",
             "ids",
-            "ids."
+            "ids.",
         ]
         self._bad_words_ids = [
             self.tokenizer(p, add_special_tokens=False).input_ids
@@ -90,9 +99,31 @@ class GPT2XLAgent:
             if len(self.tokenizer(p, add_special_tokens=False).input_ids) > 0
         ]
 
+        # Force " FROM " somewhere in the output to reduce SELECT-lists without FROM.
+        self._force_from_ids = self.tokenizer(" FROM ", add_special_tokens=False).input_ids
+
+        # Markers that indicate template/garbage outputs (reject candidates that contain them).
+        self._reject_markers = [
+            "????",
+            "<columns>",
+            "<table>",
+            "<condition>",
+            "----------------",
+        ]
+
+    # ----------------------------
+    # Schema helpers
+    # ----------------------------
     def _parse_schema_identifiers(self, schema: str) -> Tuple[set[str], set[str]]:
-        tables = set()
-        cols = set()
+        """
+        Parse compact schema lines:
+          table(col1, col2, ...)
+        Returns:
+          allowed_tables (lowercase)
+          allowed_cols (lowercase union)
+        """
+        tables: set[str] = set()
+        cols: set[str] = set()
         for ln in schema.splitlines():
             ln = ln.strip()
             if not ln:
@@ -107,34 +138,14 @@ class GPT2XLAgent:
                     cols.add(c)
         return tables, cols
 
-    def _extract_identifiers_rough(self, sql: str) -> Tuple[set[str], set[str]]:
-        """
-        Rough identifier extraction:
-        - tables from FROM/JOIN tokens
-        - columns from patterns like t.col or bare col in SELECT/WHERE (very rough)
-        This is meant for gating, not correctness.
-        """
-        s = sql.lower()
-        table_hits = set(re.findall(r"\bfrom\s+([a-z_][a-z0-9_]*)\b", s))
-        join_hits = set(re.findall(r"\bjoin\s+([a-z_][a-z0-9_]*)\b", s))
-        tables = table_hits | join_hits
-
-        # t.col patterns
-        dotted_cols = set(re.findall(r"\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b", s))
-        cols = {c for (_, c) in dotted_cols}
-
-        # bare columns are too ambiguous; we avoid hard-gating on them
-        return tables, cols
-
     @staticmethod
     def _schema_to_tables_bullets(schema: str) -> str:
         """
-        Convert lines like:
-          flights(id, origin, destination)
+        Convert:
+          movie(mid, title, release_year)
         into:
           Tables:
-          - flights: id, origin, destination
-        If parsing fails, return empty string (no harm).
+          - movie: mid, title, release_year
         """
         lines = [ln.strip() for ln in schema.splitlines() if ln.strip()]
         rows = []
@@ -151,12 +162,12 @@ class GPT2XLAgent:
 
         return "Tables:\n" + "\n".join(rows) + "\n"
 
+    # ----------------------------
+    # Prompt building / truncation
+    # ----------------------------
     def build_prompt(self, schema: str, question: str) -> str:
         tables_view = self._schema_to_tables_bullets(schema)
-        if tables_view:
-            schema_block = tables_view
-        else:
-            schema_block = schema
+        schema_block = tables_view if tables_view else schema
 
         return (
             f"{self._prefix}{schema_block}"
@@ -177,7 +188,6 @@ class GPT2XLAgent:
         kept = []
         used = 0
         for ln in lines:
-            # Tokenize line with trailing newline to match actual usage
             ln_ids = self.tokenizer(ln + "\n", add_special_tokens=False).input_ids
             if used + len(ln_ids) > schema_budget_tokens:
                 break
@@ -191,7 +201,7 @@ class GPT2XLAgent:
         if budget <= 0:
             raise ValueError(f"max_new_tokens={max_new_tokens} leaves no room for prompt in ctx={self.max_ctx}")
 
-        # Build schema block with redundant tables view, then truncate safely by lines.
+        # Use tables bullets view for copyability; truncate by lines.
         tables_view = self._schema_to_tables_bullets(schema)
         schema_full = tables_view if tables_view else schema
 
@@ -207,7 +217,10 @@ class GPT2XLAgent:
 
         # If question too long, truncate (rare)
         if fixed_len > budget:
-            keep = max(32, budget - (len(self._prefix_ids) + len(self._rules_ids) + len(self._mid_ids) + len(self._suffix_ids)))
+            keep = max(
+                32,
+                budget - (len(self._prefix_ids) + len(self._rules_ids) + len(self._mid_ids) + len(self._suffix_ids))
+            )
             question_ids = question_ids[-keep:]
             fixed_len = (
                 len(self._prefix_ids)
@@ -218,7 +231,6 @@ class GPT2XLAgent:
             )
 
         schema_budget = max(0, budget - fixed_len)
-
         schema_trunc = self._truncate_schema_by_lines(schema_full, schema_budget)
         schema_ids = self.tokenizer(schema_trunc, add_special_tokens=False).input_ids
 
@@ -231,16 +243,122 @@ class GPT2XLAgent:
             "input_len": len(input_ids),
         }
 
+    
+    def normalize_table_case(self, sql: str, table_map: Dict[str, str]) -> str:
+        """
+        Replace table names in SQL to match the *actual* case in the DB.
+        - table_map: lowercase_table -> actual_table
+        - avoids changing inside single/double quoted strings.
+        - replaces whole tokens only.
+        """
+        if not sql:
+            return sql
+
+        parts = self._QUOTED.split(sql)  # keeps delimiters
+        for i in range(0, len(parts), 2):  # only outside quotes
+            chunk = parts[i]
+
+            # Replace longest names first (airport_service before airport)
+            for key in sorted(table_map.keys(), key=len, reverse=True):
+                actual = table_map[key]
+                # token boundary: not surrounded by [A-Za-z0-9_]
+                chunk = re.sub(
+                    rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])",
+                    actual,
+                    chunk,
+                    flags=re.IGNORECASE,  # match any case in gold/pred
+                )
+
+            parts[i] = chunk
+
+        return "".join(parts)
+
+    # ----------------------------
+    # SQL extraction / sanitation / gating
+    # ----------------------------
+    @staticmethod
+    def _extract_sql(text: str) -> str:
+        # Stop at first semicolon if present, else first blank line or line break
+        semi = text.find(";")
+        if semi != -1:
+            return text[: semi + 1].strip()
+
+        for sep in ["\n\n", "\r\n\r\n", "\n", "\r\n"]:
+            idx = text.find(sep)
+            if idx != -1:
+                return text[:idx].strip()
+
+        return text.strip()
+
+    @staticmethod
+    def _sanitize_sql_text(s: str) -> str:
+        # Replace NBSP and other weird spaces with normal spaces
+        s = s.replace("\u00A0", " ").replace("\u2007", " ").replace("\u202F", " ")
+        # Normalize newlines
+        s = s.replace("\r\n", "\n")
+        return s
+
+    @staticmethod
+    def _strip_string_literals(s: str) -> str:
+        # Replace quoted strings to avoid capturing identifiers inside them.
+        s = re.sub(r"'([^'\\]|\\.)*'", "''", s)
+        s = re.sub(r'"([^"\\]|\\.)*"', '""', s)
+        return s
+
+    def _extract_identifiers(self, sql: str) -> Tuple[set[str], set[str]]:
+        """
+        Lightweight identifier extraction for gating (NOT a SQL parser).
+        Returns (tables_used, cols_used) in lowercase.
+
+        - tables: tokens after FROM/JOIN
+        - aliases: collected from FROM/JOIN ... [AS] alias
+        - cols: dotted references + bare identifiers (excluding SQL keywords/tables/aliases)
+        """
+        s = sql.lower()
+        s = self._strip_string_literals(s)
+
+        # tables after FROM/JOIN
+        tables = set(re.findall(r"\bfrom\s+([a-z_][a-z0-9_]*)\b", s))
+        tables |= set(re.findall(r"\bjoin\s+([a-z_][a-z0-9_]*)\b", s))
+
+        # aliases after FROM/JOIN
+        alias_pairs = re.findall(r"\bfrom\s+([a-z_][a-z0-9_]*)\s+(?:as\s+)?([a-z_][a-z0-9_]*)\b", s)
+        alias_pairs += re.findall(r"\bjoin\s+([a-z_][a-z0-9_]*)\s+(?:as\s+)?([a-z_][a-z0-9_]*)\b", s)
+        aliases = {alias for (_, alias) in alias_pairs}
+
+        # dotted references: t.col / a.col
+        dotted = re.findall(r"\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b", s)
+        cols = {c for (_, c) in dotted}
+
+        # bare identifiers: any word-like token that's not a keyword/table/alias
+        tokens = re.findall(r"\b[a-z_][a-z0-9_]*\b", s)
+        for tok in tokens:
+            if tok in SQL_KEYWORDS:
+                continue
+            if tok in tables:
+                continue
+            if tok in aliases:
+                continue
+            if tok in {"true", "false"}:
+                continue
+            cols.add(tok)
+
+        return tables, cols
+
+    def _ok(self, sql: str) -> bool:
+        return not any(m in sql for m in self._reject_markers)
+    
+    # ----------------------------
+    # Main generation
+    # ----------------------------
     def generate_sql(self, schema: str, question: str, max_new_tokens: int = 128) -> str:
         inputs = self._make_inputs_under_limit(schema, question, max_new_tokens=max_new_tokens)
         input_len = inputs.pop("input_len")
 
         stopping = StoppingCriteriaList([_SQLStoppingCriteria(self.tokenizer, input_len)])
 
-        # schema whitelist
+        # schema whitelist (use original compact schema, not bullet view)
         allowed_tables, allowed_cols = self._parse_schema_identifiers(schema)
-
-        force_from = self.tokenizer(" FROM ", add_special_tokens=False).input_ids
 
         with torch.no_grad():
             out = self.model.generate(
@@ -260,16 +378,22 @@ class GPT2XLAgent:
                 pad_token_id=self.tokenizer.eos_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
 
-                bad_words_ids=self._bad_words_ids,
-                force_words_ids=[force_from],
+                bad_words_ids=self._bad_words_ids if self._bad_words_ids else None,
+                force_words_ids=[self._force_from_ids],
                 return_dict_in_generate=True,
                 output_scores=True,
             )
-        
-        seqs = out.sequences
-        seq_scores = out.sequences_scores
 
+        seqs = out.sequences
+        seq_scores = getattr(out, "sequences_scores", None)
+
+        # Keep raw candidates for fallback selection
+        raw_candidates: List[Tuple[float, str]] = []
+        raw_with_from: List[Tuple[float, str]] = []
+
+        # Valid candidates after gating
         candidates: List[Tuple[float, str]] = []
+
         for i in range(seqs.size(0)):
             gen_ids = seqs[i][input_len:]
             gen_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
@@ -279,60 +403,54 @@ class GPT2XLAgent:
             candidate = self._sanitize_sql_text(candidate)
             sql = self._extract_sql(candidate).strip()
 
-            # Basic must-have: include FROM (your tasks basically always need it)
+            score = float(seq_scores[i].item()) if seq_scores is not None else 0.0
+
+            raw_candidates.append((score, sql))
+            if " from " in f" {sql.lower()} ":
+                raw_with_from.append((score, sql))
+
+            # Reject obvious template/garbage placeholders
+            if any(m in sql for m in self._reject_markers):
+                continue
+
+            # Must contain FROM (these datasets are overwhelmingly SELECT-FROM-WHERE)
             if " from " not in f" {sql.lower()} ":
                 continue
 
-            # Identifier gate
-            used_tables, used_cols = self._extract_identifiers_rough(sql)
+            # Identifier gate (tables + columns, including bare columns)
+            used_tables, used_cols = self._extract_identifiers(sql)
+
             if used_tables and not used_tables.issubset(allowed_tables):
                 continue
-            # dotted cols gate (safe-ish)
+
             if used_cols and not used_cols.issubset(allowed_cols):
                 continue
 
-            candidates.append((float(seq_scores[i].item()), sql))
+            candidates.append((score, sql))
 
-        # If nothing passes, fall back to best raw (still cleaned)
+        # If nothing passes, fallback to best candidate that at least contains FROM; else best raw.
         if not candidates:
-            best_i = int(torch.argmax(seq_scores).item())
-            gen_ids = seqs[best_i][input_len:]
-            gen_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
-            gen_text = self._sanitize_sql_text(gen_text)
-            sql = self._extract_sql("SELECT " + gen_text).strip()
-            return sql
+            raw_with_from_ok = [(sc, s) for sc, s in raw_with_from if self._ok(s)]
+            if raw_with_from_ok:
+                raw_with_from_ok.sort(key=lambda x: x[0], reverse=True)
+                chosen = raw_with_from_ok[0][1]
+            else:
+                raw_ok = [(sc, s) for sc, s in raw_candidates if self._ok(s)]
+                if raw_ok:
+                    raw_ok.sort(key=lambda x: x[0], reverse=True)
+                    chosen = raw_ok[0][1]
+                else:
+                    raw_candidates.sort(key=lambda x: x[0], reverse=True)
+                    chosen = raw_candidates[0][1] if raw_candidates else ""
+            return chosen.strip()
 
         # pick best score among valid candidates
         candidates.sort(key=lambda x: x[0], reverse=True)
-        best_sql = candidates[0][1]
+        best_sql = candidates[0][1].strip()
 
         if self.debug:
             print("=== CANDIDATES (valid) ===")
             for sc, s in candidates:
-                print(sc, s)            
+                print(sc, s)
+
         return best_sql
-
-
-
-
-    @staticmethod
-    def _extract_sql(text: str) -> str:
-        # Stop at first semicolon if present, else first blank line or line break
-        semi = text.find(";")
-        if semi != -1:
-            return text[: semi + 1].strip()
-
-        for sep in ["\n\n", "\r\n\r\n", "\n", "\r\n"]:
-            idx = text.find(sep)
-            if idx != -1:
-                return text[:idx].strip()
-
-        return text.strip()
-    
-    def _sanitize_sql_text(self, s: str) -> str:
-        # Replace NBSP and other weird spaces with normal spaces
-        s = s.replace("\u00A0", " ").replace("\u2007", " ").replace("\u202F", " ")
-        # Normalize newlines
-        s = s.replace("\r\n", "\n")
-        return s
-

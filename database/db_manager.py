@@ -230,6 +230,7 @@ class DatabaseManager:
 
         # ----------------------------
 
+    # ----------------------------
     # Schema introspection helpers (cached)
     # ----------------------------
 
@@ -444,6 +445,10 @@ class DatabaseManager:
                     break
 
         return selected
+
+    # ----------------------------
+    # Database management
+    # ----------------------------
 
     def switch_database(self, database):
         """Switch to different database"""

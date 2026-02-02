@@ -34,6 +34,7 @@ _TABLE_POS = re.compile(
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
+
 def _best_table_match(token: str, tables: List[str], min_ratio: float = 0.86) -> Tuple[str, float, float]:
     """
     Returns (best_table, best_ratio, second_best_ratio).
@@ -65,6 +66,7 @@ def _best_table_match(token: str, tables: List[str], min_ratio: float = 0.86) ->
     if best_r < min_ratio:
         return token, best_r, second_r  # no change
     return best, best_r, second_r
+
 
 def repair_pred_table_names(sql: str, actual_tables: List[str], min_ratio: float = 0.86, min_gap: float = 0.03):
     """
@@ -101,6 +103,9 @@ def repair_pred_table_names(sql: str, actual_tables: List[str], min_ratio: float
     return "".join(parts), changes
 
 
+# -----------------------
+# SQL utilities
+# ----------------------
 
 def fill_gold_sql(entry: dict, sentence: dict) -> str:
     """
@@ -154,7 +159,6 @@ def fill_gold_sql(entry: dict, sentence: dict) -> str:
         sql = pattern.sub(str(value), sql)
 
     return sql
-
 
 
 def normalize_pred_sql(pred_sql: str, schema_tables: list[str]) -> str:
@@ -216,6 +220,7 @@ def compare_results(result1, result2) -> bool:
         return df1.equals(df2)
     except Exception:
         return False
+
 
 def compare_db_results(mysql_result, mariadb_result):
     """
