@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 import time
 
-# Add project root to sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Add project root to sys.path (i want two levels up)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from models.gpt2xl_agent import GPT2XLAgent
 from database.db_manager import DatabaseManager
@@ -60,20 +60,20 @@ def main():
     parser.add_argument(
         "--rdbms",
         type=str,
-        default="mariadb",
+        default="mysql",
         choices=["mysql", "mariadb"],
         help="Which RDBMS to use for schema introspection (default: mysql).",
     )
     parser.add_argument(
         "--max_tables",
         type=int,
-        default=10,
+        default=4,
         help="Max tables to include in compact schema (passed to get_compact_schema).",
     )
     parser.add_argument(
         "--max_new_tokens",
         type=int,
-        default=64,
+        default=128,
         help="Max tokens to generate for SQL.",
     )
     parser.add_argument(
@@ -85,7 +85,7 @@ def main():
     parser.add_argument(
         "--entry_idx",
         type=int,
-        default=100,
+        default=0,
         help="Start from this entry index in the dataset list (default: 0).",
     )
     args = parser.parse_args()
@@ -97,7 +97,7 @@ def main():
     dataset_name = dataset_path.stem  # DB name convention
     data = load_dataset(dataset_path)
 
-    agent = GPT2XLAgent()
+    agent = GPT2XLAgent(debug=True)
 
     # Use DB manager only for compact schema construction (same as benchmark)
     db = DatabaseManager(args.rdbms)
@@ -130,6 +130,8 @@ def main():
                 question=question_filled,
                 max_tables=args.max_tables,
             )
+
+            gold_sql = sentence.get("sql")
             print("\n" + "-" * 80)
             print(f"Question #{n_done}")
             print(f"question_text:        {question_text}")
@@ -137,6 +139,9 @@ def main():
             print(f"variables:            {variables}")
             print("\nSchema (compact):")
             print(schema_compact)
+            if gold_sql:
+                print("\nGold SQL:")
+                print(gold_sql)
             print("\nPredicted SQL:")
 
             t0 = time.time()
@@ -151,6 +156,9 @@ def main():
             print(f"\n(Time taken: {t1 - t0:.2f} seconds)")
             print("-" * 80)
 
+            # execute the query to the database
+            pred_res = db.execute_query(pred_sql)
+            print(f"Predicted SQL result: {pred_res}")
             n_done += 1
 
         if n_done >= args.limit:
