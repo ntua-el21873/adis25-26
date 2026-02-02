@@ -237,28 +237,11 @@ def repair_pred_column_names(
     Repairs predicted SQL column names ONLY in dotted positions (<alias_or_table>.<col>)
     and ONLY outside quotes, using schema_map for table->columns.
 
-    Inputs:
-      - sql: predicted SQL string
-      - schema_map: {table: [col1, col2, ...]}
-      - alias_to_table: mapping alias->real_table (lowercased). If None, we infer from sql.
-      - min_ratio/min_gap: fuzzy match thresholds
-      - allow_id_abbrev: enable safe mapping for id-like hallucinations (actor_id -> aid, movie_id -> mid)
-
     Returns: (new_sql, changes)
-      changes: list of dicts like:
-        {
-          "table_or_alias": "a",
-          "resolved_table": "actor",
-          "from": "actor_id",
-          "to": "aid",
-          "ratio": 1.0,
-          "method": "id_abbrev" | "exact" | "fuzzy"
-        }
     """
     if not sql or not schema_map:
         return sql, []
 
-    # Normalize schema_map key access (case-insensitive)
     schema_lut: Dict[str, List[str]] = {t.lower(): cols for t, cols in schema_map.items()}
 
     if alias_to_table is None:
@@ -266,8 +249,58 @@ def repair_pred_column_names(
 
     parts = _QUOTED.split(sql)
     changes: List[Dict[str, Any]] = []
+    seen_changes: set[tuple] = set()
 
-    for i in range(0, len(parts), 2):  # outside quotes only
+    def _push_change(d: Dict[str, Any]):
+        key = (
+            d.get("table_or_alias"),
+            d.get("resolved_table"),
+            d.get("from"),
+            d.get("to"),
+            d.get("method"),
+        )
+        if key not in seen_changes:
+            seen_changes.add(key)
+            changes.append(d)
+
+    def _exact_col(cols: List[str], target_lower: str) -> str | None:
+        for real_c in cols:
+            if real_c.lower() == target_lower:
+                return real_c
+        return None
+
+    def _try_prefix_strip(col_l: str, resolved_table: str, left_l: str) -> str | None:
+        """
+        High-precision: if col looks like '<table>_<name>' or '<alias>_<name>',
+        strip the prefix and return stripped token (lowercased), else None.
+        """
+        # Candidates: resolved_table_, left_, plus simple plural variant
+        prefixes = [resolved_table, left_l]
+        if resolved_table.endswith("s"):
+            prefixes.append(resolved_table[:-1])
+        else:
+            prefixes.append(resolved_table + "s")
+
+        for p in prefixes:
+            p = (p or "").lower()
+            if p and col_l.startswith(p + "_"):
+                return col_l[len(p) + 1 :]  # strip "p_"
+        return None
+
+    def _id_abbrev_allowed(col_l: str, resolved_table: str, left_l: str) -> bool:
+        """
+        Prevent over-eager *_id mapping:
+          allow only id, <table>_id, <alias>_id.
+        """
+        if col_l == "id":
+            return True
+        if col_l == f"{resolved_table}_id":
+            return True
+        if col_l == f"{left_l}_id":
+            return True
+        return False
+
+    for i in range(0, len(parts), 2):
         chunk = parts[i]
 
         def repl(m: re.Match):
@@ -277,58 +310,64 @@ def repair_pred_column_names(
             left_l = left.lower()
             col_l = col.lower()
 
-            # Resolve alias->table (fallback: treat left as table)
             resolved_table = alias_to_table.get(left_l, left_l)
-
             cols = schema_lut.get(resolved_table or "")
             if not cols:
-                # Unknown table/alias -> don't touch
                 return m.group(0)
 
-            # If already valid, keep (case preserved)
-            for real_c in cols:
-                if real_c.lower() == col_l:
-                    # Optionally normalize case to schema's column casing:
-                    if real_c != col:
-                        changes.append({
+            # 1) exact match already valid
+            real = _exact_col(cols, col_l)
+            if real is not None:
+                if real != col:
+                    _push_change({
+                        "table_or_alias": left,
+                        "resolved_table": resolved_table,
+                        "from": col,
+                        "to": real,
+                        "ratio": 1.0,
+                        "method": "exact",
+                    })
+                    return f"{lq1}{left}{lq2}.{rq1}{real}{rq2}"
+                return m.group(0)
+
+            # 2) prefix-strip repair: actor.actor_name -> actor.name
+            stripped = _try_prefix_strip(col_l, resolved_table or "", left_l)
+            if stripped:
+                real2 = _exact_col(cols, stripped)
+                if real2 is not None:
+                    _push_change({
+                        "table_or_alias": left,
+                        "resolved_table": resolved_table,
+                        "from": col,
+                        "to": real2,
+                        "ratio": 1.0,
+                        "method": "prefix_strip",
+                    })
+                    return f"{lq1}{left}{lq2}.{rq1}{real2}{rq2}"
+
+            # 3) safe id abbreviation repair (tighter trigger)
+            if allow_id_abbrev and _id_abbrev_allowed(col_l, resolved_table or "", left_l):
+                inferred = _infer_id_abbrev(resolved_table or "")
+                if inferred:
+                    real3 = _exact_col(cols, inferred.lower())
+                    if real3 is not None:
+                        _push_change({
                             "table_or_alias": left,
                             "resolved_table": resolved_table,
                             "from": col,
-                            "to": real_c,
+                            "to": real3,
                             "ratio": 1.0,
-                            "method": "exact",
+                            "method": "id_abbrev",
                         })
-                        return f"{lq1}{left}{lq2}.{rq1}{real_c}{rq2}"
-                    return m.group(0)
+                        return f"{lq1}{left}{lq2}.{rq1}{real3}{rq2}"
 
-            # Safe id abbreviation repair (high precision for your datasets)
-            if allow_id_abbrev:
-                # If model says actor_id / movie_id / director_id / ... or plain id
-                if col_l == "id" or col_l.endswith("_id"):
-                    inferred = _infer_id_abbrev(resolved_table or "")
-                    if inferred:
-                        # Only apply if inferred abbrev exists in this table
-                        for real_c in cols:
-                            if real_c.lower() == inferred:
-                                changes.append({
-                                    "table_or_alias": left,
-                                    "resolved_table": resolved_table,
-                                    "from": col,
-                                    "to": real_c,
-                                    "ratio": 1.0,
-                                    "method": "id_abbrev",
-                                })
-                                return f"{lq1}{left}{lq2}.{rq1}{real_c}{rq2}"
-
-            # Fuzzy match within this table's columns
+            # 4) fuzzy match within table
             best, best_r, second_r = _best_col_match(col, cols, min_ratio=min_ratio)
-
             if best.lower() != col_l:
-                # ambiguity guard
                 if (best_r - second_r) < min_gap and best_r < 0.99:
                     return m.group(0)
 
-                changes.append({
+                _push_change({
                     "table_or_alias": left,
                     "resolved_table": resolved_table,
                     "from": col,
@@ -344,6 +383,7 @@ def repair_pred_column_names(
         parts[i] = chunk
 
     return "".join(parts), changes
+
 # -----------------------
 # SQL utilities
 # ----------------------
