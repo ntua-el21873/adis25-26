@@ -182,6 +182,7 @@ def main():
 
     row_id = 0
     questions_processed = 0
+    skipped = 0
 
     # 3. Processing Loop
     with out_path.open("w", encoding="utf-8") as f:
@@ -238,9 +239,10 @@ def main():
                         max_new_tokens=args.max_new_tokens,
                     )
                 except Exception as e:
-                    print(f"Gen Error: {e}")
-                    pred_sql_raw = "SELECT 1;"
-                    p_tokens, c_tokens = 0, 0
+                    skipped += 1
+                    print(f"[{row_id}] Skipping due to generation error: {e}")
+                    print(f"Current skipped count: {skipped}")
+                    continue
 
                 gen_time_s = time.time() - t0
 
