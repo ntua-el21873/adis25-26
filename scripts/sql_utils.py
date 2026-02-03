@@ -522,6 +522,10 @@ def compare_results(result1, result2) -> bool:
     Returns:
         bool: True if results match, False otherwise
     """
+    print("Comparing two results:")
+    print(result1)
+    print("="*40)
+    print(result2)
 
     if result1 is None or result2 is None:
         return False
