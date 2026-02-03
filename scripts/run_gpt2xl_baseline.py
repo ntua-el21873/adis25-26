@@ -35,6 +35,8 @@ from sql_utils import (
     compare_results,
     repair_pred_table_names,
     repair_pred_column_names,
+    parse_schema_counts,
+    normalize_table_case,
 )
 
 
@@ -179,7 +181,6 @@ def get_difficulty(entry: dict, sentence: dict) -> int:
 # Variable substitution for question_text_filled (best-effort)
 # ----------------------------
 
-
 def build_identifier_maps(db: DatabaseManager, dataset_name: str):
     """
     Input: DatabaseManager + dataset name
@@ -227,49 +228,6 @@ def fill_question_text(question_text: str, variables: Dict[str, Any]) -> str:
 # ----------------------------
 # Schema/prompt instrumentation
 # ----------------------------
-
-def parse_schema_counts(schema_compact: str) -> Tuple[int, Optional[int]]:
-    """
-    Heuristic parsing of compact schema string to estimate:
-      - schema_num_tables
-      - schema_num_columns
-
-    Adjust if your schema_compact format differs.
-    """
-    if not schema_compact or not schema_compact.strip():
-        return 0, 0
-
-    lines = [ln.strip() for ln in schema_compact.splitlines() if ln.strip()]
-    tables: List[str] = []
-    col_count = 0
-
-    for ln in lines:
-        # table(col1, col2)
-        m = re.match(r"^([A-Za-z_][\w]*)\s*\((.*)\)\s*$", ln)
-        if m:
-            t = m.group(1)
-            tables.append(t)
-            cols_blob = m.group(2).strip()
-            if cols_blob:
-                cols = [c.strip() for c in cols_blob.split(",") if c.strip()]
-                col_count += len(cols)
-            continue
-
-        # table: col1, col2
-        m = re.match(r"^([A-Za-z_][\w]*)\s*:\s*(.*)\s*$", ln)
-        if m:
-            t = m.group(1)
-            tables.append(t)
-            cols_blob = m.group(2).strip()
-            if cols_blob:
-                cols = [c.strip() for c in cols_blob.split(",") if c.strip()]
-                col_count += len(cols)
-            continue
-
-    schema_num_tables = len(dict.fromkeys(tables))
-    schema_num_columns = col_count if col_count >= 0 else None
-    return schema_num_tables, schema_num_columns
-
 
 def count_prompt_tokens_effective(
     agent: GPT2XLAgent, schema_compact: str, question: str, max_new_tokens: int
@@ -448,6 +406,7 @@ def main() -> int:
     schema_map = db.get_schema_map()
     row_id = 0
     questions_processed = 0
+    skipped = 0
 
     with out_path.open("w", encoding="utf-8") as f:
         for entry in data:
@@ -490,16 +449,27 @@ def main() -> int:
 
                 # Generate SQL (time only generation)
                 t0 = time.time()
-                pred_sql_raw = agent.generate_sql(
-                    schema=schema_compact,
-                    question=question_text_filled,
-                    max_new_tokens=args.max_new_tokens,
-                )
+                try:
+                    pred_sql_raw = agent.generate_sql(
+                        schema=schema_compact,
+                        question=question_text_filled,
+                        max_new_tokens=args.max_new_tokens,
+                        max_time=240.0,  # 4 min per query timeout
+                    )
+                except RuntimeError as e:
+                    skipped += 1
+                    print(
+                        f"[SKIP] RuntimeError during generation "
+                        f"(skipped so far: {skipped})"
+                    )
+                    if args.debug:
+                        print(str(e))
+                    continue  # move to next question
                 gen_time_s = time.time() - t0
 
                 # Normalize prediction (table casing etc.)
                 pred_sql = normalize_pred_sql(pred_sql_raw, schema_tables)
-                pred_sql = agent.normalize_table_case(pred_sql, table_map)
+                pred_sql = normalize_table_case(pred_sql, table_map)
                 pred_sql, pred_repairs = repair_pred_table_names(
                     pred_sql, schema_tables
                 )
@@ -525,6 +495,7 @@ def main() -> int:
                     "question_variables": question_vars,
                     "query_split": query_split,
                     "question_split": question_split,
+                    "difficulty": difficulty,
                     # Gold SQL
                     "gold_sql_first": gold_sql_first,
                     "gold_sql_exec": gold_sql_exec,
@@ -536,8 +507,9 @@ def main() -> int:
                     # LLM output
                     "pred_sql_raw": pred_sql_raw,
                     "pred_sql": pred_sql,
+                    "pred_repairs": pred_repairs,
+                    "pred_col_repairs": pred_col_repairs,
                     "gen_time_s": round(gen_time_s, 6),
-                    "difficulty": difficulty,
                 }
 
                 # Execution results (namespaced)
@@ -546,9 +518,6 @@ def main() -> int:
 
                 # Execution comparison
                 record[f"{rdbms}_pred_vs_gold_match"] = bool(match)
-
-                record["pred_repairs"] = pred_repairs
-                record["pred_column_repairs"] = pred_col_repairs
 
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 

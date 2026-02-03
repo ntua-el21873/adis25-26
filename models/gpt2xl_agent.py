@@ -54,9 +54,9 @@ class _SQLStoppingCriteria(StoppingCriteria):
 
 class GPT2XLAgent:
     def __init__(self, device: str | None = None, debug: bool = False):
+        print(f"⏳ Loading {MODEL_ID} locally... (this might take a minute)")
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.debug = debug
-        self._QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")")
 
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         self.model = AutoModelForCausalLM.from_pretrained(MODEL_ID).to(self.device)
@@ -243,36 +243,6 @@ class GPT2XLAgent:
             "input_len": len(input_ids),
         }
 
-    
-    def normalize_table_case(self, sql: str, table_map: Dict[str, str]) -> str:
-        """
-        Replace table names in SQL to match the *actual* case in the DB.
-        - table_map: lowercase_table -> actual_table
-        - avoids changing inside single/double quoted strings.
-        - replaces whole tokens only.
-        """
-        if not sql:
-            return sql
-
-        parts = self._QUOTED.split(sql)  # keeps delimiters
-        for i in range(0, len(parts), 2):  # only outside quotes
-            chunk = parts[i]
-
-            # Replace longest names first (airport_service before airport)
-            for key in sorted(table_map.keys(), key=len, reverse=True):
-                actual = table_map[key]
-                # token boundary: not surrounded by [A-Za-z0-9_]
-                chunk = re.sub(
-                    rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])",
-                    actual,
-                    chunk,
-                    flags=re.IGNORECASE,  # match any case in gold/pred
-                )
-
-            parts[i] = chunk
-
-        return "".join(parts)
-
     # ----------------------------
     # SQL extraction / sanitation / gating
     # ----------------------------
@@ -351,7 +321,7 @@ class GPT2XLAgent:
     # ----------------------------
     # Main generation
     # ----------------------------
-    def generate_sql(self, schema: str, question: str, max_new_tokens: int = 128) -> str:
+    def generate_sql(self, schema: str, question: str, max_new_tokens: int = 128, max_time: float | None = None) -> str:
         inputs = self._make_inputs_under_limit(schema, question, max_new_tokens=max_new_tokens)
         input_len = inputs.pop("input_len")
 
@@ -382,6 +352,8 @@ class GPT2XLAgent:
                 force_words_ids=[self._force_from_ids],
                 return_dict_in_generate=True,
                 output_scores=True,
+
+                max_time=max_time,
             )
 
         seqs = out.sequences

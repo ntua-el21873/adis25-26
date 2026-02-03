@@ -8,8 +8,9 @@ SQL utilities for Text2SQL evaluation.
 """
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 from difflib import SequenceMatcher
+from database.db_manager import DatabaseManager
 
 _QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\")")
 
@@ -141,8 +142,6 @@ _DOTTED_COL = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
-def _ratio(a: str, b: str) -> float:
-    return SequenceMatcher(None, a, b).ratio()
 
 def extract_table_alias_map(sql: str) -> Dict[str, str]:
     """
@@ -169,6 +168,7 @@ def extract_table_alias_map(sql: str) -> Dict[str, str]:
                 alias_to_table[alias.lower()] = table.lower()
 
     return alias_to_table
+
 
 def _best_col_match(
     token: str,
@@ -224,6 +224,7 @@ def _infer_id_abbrev(table: str) -> str | None:
         return "sid"
     # generic: first char + "id"
     return f"{t[0]}id"
+
 
 def repair_pred_column_names(
     sql: str,
@@ -387,6 +388,53 @@ def repair_pred_column_names(
 # -----------------------
 # SQL utilities
 # ----------------------
+def normalize_table_case(sql: str, table_map: Dict[str, str]) -> str:
+        """
+        Replace table names in SQL to match the *actual* case in the DB.
+        - table_map: lowercase_table -> actual_table
+        - avoids changing inside single/double quoted strings.
+        - replaces whole tokens only.
+        """
+        if not sql:
+            return sql
+
+        parts = _QUOTED.split(sql)  # keeps delimiters
+        for i in range(0, len(parts), 2):  # only outside quotes
+            chunk = parts[i]
+
+            # Replace longest names first (airport_service before airport)
+            for key in sorted(table_map.keys(), key=len, reverse=True):
+                actual = table_map[key]
+                # token boundary: not surrounded by [A-Za-z0-9_]
+                chunk = re.sub(
+                    rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])",
+                    actual,
+                    chunk,
+                    flags=re.IGNORECASE,  # match any case in gold/pred
+                )
+
+            parts[i] = chunk
+
+        return "".join(parts)
+
+
+def build_identifier_maps(db: DatabaseManager, dataset_name: str):
+    """
+    Input: DatabaseManager + dataset name
+    Output: table_map: lowercase_table -> actual_table
+    """
+    # Actual table names from DB
+    tables = db.get_table_names(
+        database=dataset_name
+    )  # e.g. ["airport", "flight", ...]
+    table_map = {t.lower(): t for t in tables}  # map lowercase -> actual
+
+    # Optional: columns too, if you have/get them
+    # columns = db.get_all_columns(database=dataset_name)  # you may need to add this
+    # col_map = {c.lower(): c for c in columns}
+
+    return table_map
+
 
 def fill_gold_sql(entry: dict, sentence: dict) -> str:
     """
@@ -488,7 +536,9 @@ def compare_results(result1, result2) -> bool:
 
     if df1.shape != df2.shape:
         return False
-
+    print("Comparing results:")
+    print(df1)
+    print(df2)
     try:
         # Normalize NaN / None
         df1 = df1.fillna("__NULL__")
@@ -539,3 +589,46 @@ def compare_db_results(mysql_result, mariadb_result):
             mariadb_result['execution_time']
         )
     }
+
+
+def parse_schema_counts(schema_compact: str) -> Tuple[int, Optional[int]]:
+    """
+    Heuristic parsing of compact schema string to estimate:
+      - schema_num_tables
+      - schema_num_columns
+
+    Adjust if your schema_compact format differs.
+    """
+    if not schema_compact or not schema_compact.strip():
+        return 0, 0
+
+    lines = [ln.strip() for ln in schema_compact.splitlines() if ln.strip()]
+    tables: List[str] = []
+    col_count = 0
+
+    for ln in lines:
+        # table(col1, col2)
+        m = re.match(r"^([A-Za-z_][\w]*)\s*\((.*)\)\s*$", ln)
+        if m:
+            t = m.group(1)
+            tables.append(t)
+            cols_blob = m.group(2).strip()
+            if cols_blob:
+                cols = [c.strip() for c in cols_blob.split(",") if c.strip()]
+                col_count += len(cols)
+            continue
+
+        # table: col1, col2
+        m = re.match(r"^([A-Za-z_][\w]*)\s*:\s*(.*)\s*$", ln)
+        if m:
+            t = m.group(1)
+            tables.append(t)
+            cols_blob = m.group(2).strip()
+            if cols_blob:
+                cols = [c.strip() for c in cols_blob.split(",") if c.strip()]
+                col_count += len(cols)
+            continue
+
+    schema_num_tables = len(dict.fromkeys(tables))
+    schema_num_columns = col_count if col_count >= 0 else None
+    return schema_num_tables, schema_num_columns
