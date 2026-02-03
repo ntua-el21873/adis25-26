@@ -436,6 +436,7 @@ class QwenAgent:
 
                 pad_token_id=self.tokenizer.eos_token_id,
                 eos_token_id=self.tokenizer.eos_token_id,
+                trust_remote_code=True,
 
                 bad_words_ids=self._bad_words_ids if self._bad_words_ids else None,
                 force_words_ids=[self._force_from_ids],
