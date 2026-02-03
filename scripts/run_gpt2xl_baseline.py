@@ -119,6 +119,25 @@ def _count_from_sources(sql_upper: str) -> int:
     return max(comma_sources, 1 + join_sources if join_sources > 0 else 0)
 
 
+def read_last_row_id(jsonl_path: Path) -> int:
+    if not jsonl_path.exists() or jsonl_path.stat().st_size == 0:
+        return -1
+
+    last_id = -1
+    with jsonl_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if "id" in obj and isinstance(obj["id"], int):
+                    last_id = max(last_id, obj["id"])
+            except json.JSONDecodeError:
+                # ignore malformed lines
+                pass
+    return last_id
+
 # ----------------------------
 # SQL difficulty scoring
 # ----------------------------
@@ -364,6 +383,12 @@ def main() -> int:
     parser.add_argument(
         "--out", type=str, default="", help="Optional output JSONL path."
     )
+    parser.add_argument(
+        "--entry_idx",
+        type=int,
+        default=0,
+        help="Start from this entry index in the dataset list (default: 0).",
+    )
     args = parser.parse_args()
 
     dataset_path = Path(args.dataset)
@@ -392,6 +417,11 @@ def main() -> int:
     print(f"Max new tokens: {args.max_new_tokens}")
     print("=" * 80)
 
+    last_id = read_last_row_id(out_path)
+    resume_from = 0
+    if last_id >= 0:
+        resume_from = last_id + 1
+
     data = load_dataset(dataset_path)
 
     # Initialize model once
@@ -408,8 +438,10 @@ def main() -> int:
     questions_processed = 0
     skipped = 0
 
-    with out_path.open("w", encoding="utf-8") as f:
-        for entry in data:
+    mode = "a" if out_path.exists() and out_path.stat().st_size > 0 else "w"
+    with out_path.open(mode, encoding="utf-8") as f:
+
+        for entry in data[args.entry_idx :]:
             query_split = get_query_split(entry)
             sql_variants = get_sql_variants(entry)
             gold_sql_first = sql_variants[0] if sql_variants else ""
@@ -417,6 +449,10 @@ def main() -> int:
             for sentence in iter_sentences(entry):
                 if args.limit > 0 and questions_processed >= args.limit:
                     break
+                
+                if row_id < resume_from:
+                    row_id += 1
+                    continue
 
                 question_text = get_sentence_text(sentence)
                 question_vars = get_sentence_variables(sentence)
@@ -462,8 +498,6 @@ def main() -> int:
                         f"[SKIP] RuntimeError during generation "
                         f"(skipped so far: {skipped})"
                     )
-                    if args.debug:
-                        print(str(e))
                     continue  # move to next question
                 gen_time_s = time.time() - t0
 
