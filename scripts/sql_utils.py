@@ -511,50 +511,72 @@ def normalize_pred_sql(pred_sql: str, schema_tables: list[str]) -> str:
     return normalized.strip()
 
 
+import pandas as pd
+
 def compare_results(result1, result2) -> bool:
     """
     Compare two SQL query results represented as pandas DataFrames.
 
     - Ignores row order
-    - Requires same columns
+    - Column names compared case-insensitively (and trimmed)
     - Treats NaN / NULL consistently
-    
+
     Returns:
         bool: True if results match, False otherwise
     """
-    print("Comparing two results:")
-    print(result1)
-    print("="*40)
-    print(result2)
-
     if result1 is None or result2 is None:
         return False
 
-    if set(result1.columns) != set(result2.columns):
+    if not isinstance(result1, pd.DataFrame) or not isinstance(result2, pd.DataFrame):
         return False
 
-    # Reorder columns consistently
-    cols = sorted(result1.columns.tolist())
-    df1 = result1[cols].copy()
-    df2 = result2[cols].copy()
+    def normalize_col(c: str) -> str:
+        return str(c).strip().lower()
+
+    # Build normalized->original maps (and ensure no collisions after normalization)
+    n1 = [normalize_col(c) for c in result1.columns]
+    n2 = [normalize_col(c) for c in result2.columns]
+
+    if len(set(n1)) != len(n1) or len(set(n2)) != len(n2):
+        # e.g., columns ["A", "a"] would collide -> ambiguous
+        return False
+
+    if set(n1) != set(n2):
+        return False
+
+    # Reorder both dataframes by the same normalized column order
+    norm_cols = sorted(set(n1))
+    map1 = dict(zip(n1, result1.columns))
+    map2 = dict(zip(n2, result2.columns))
+
+    df1 = result1[[map1[c] for c in norm_cols]].copy()
+    df2 = result2[[map2[c] for c in norm_cols]].copy()
+
+    # Unify column names so downstream operations align
+    df1.columns = norm_cols
+    df2.columns = norm_cols
 
     if df1.shape != df2.shape:
         return False
-    print("Comparing results:")
-    print(df1)
-    print(df2)
-    try:
-        # Normalize NaN / None
-        df1 = df1.fillna("__NULL__")
-        df2 = df2.fillna("__NULL__")
 
-        # Sort rows
-        df1 = df1.sort_values(by=cols).reset_index(drop=True)
-        df2 = df2.sort_values(by=cols).reset_index(drop=True)
+    try:
+        # Normalize NULL/NaN
+        sentinel = "__NULL__"
+        df1 = df1.fillna(sentinel)
+        df2 = df2.fillna(sentinel)
+
+        # Make comparison more stable across dtypes (optional but helpful)
+        df1 = df1.astype(str)
+        df2 = df2.astype(str)
+
+        # Sort rows (row-order independent)
+        df1 = df1.sort_values(by=norm_cols, kind="mergesort").reset_index(drop=True)
+        df2 = df2.sort_values(by=norm_cols, kind="mergesort").reset_index(drop=True)
 
         return df1.equals(df2)
     except Exception:
         return False
+
 
 
 def compare_db_results(mysql_result, mariadb_result):

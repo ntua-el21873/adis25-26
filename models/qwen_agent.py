@@ -1,6 +1,6 @@
 import re
 import torch
-from typing import Tuple, List, Set, Dict
+from typing import Tuple, List, Set, Dict, Any, Optional
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -9,7 +9,6 @@ from transformers import (
 )
 
 MODEL_ID = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
-
 
 # Lightweight keyword set for identifier gating (not a full SQL parser).
 SQL_KEYWORDS: Set[str] = {
@@ -20,11 +19,28 @@ SQL_KEYWORDS: Set[str] = {
     "case", "when", "then", "else", "end"
 }
 
+# Hard "drift" markers: if the model starts emitting these, we stop immediately.
+DRIFT_MARKERS: List[str] = [
+    "\n###",  # prompt headers coming back
+    "### ",   # sometimes no leading newline
+    "Explanation:",
+    "Rationale:",
+    "Human:",
+    "Assistant:",
+    "I'm sorry",
+    "I can't",
+    "I cannot",
+    "Write a SQL query",
+    "Human resources",
+    "policy that",
+    "criteria.",
+]
+
 
 class _SQLStoppingCriteria(StoppingCriteria):
     """
-    Stop when the generated continuation looks 'complete' or drifts into prompt headers.
-    We only inspect the NEW tokens (continuation) decoded as text.
+    Stop when the generated continuation looks 'complete' or drifts into non-SQL content.
+    We inspect ONLY the NEW tokens (continuation) decoded as text.
     """
     def __init__(self, tokenizer, input_len: int):
         super().__init__()
@@ -42,13 +58,14 @@ class _SQLStoppingCriteria(StoppingCriteria):
         if ";" in text:
             return True
 
-        # 2) Stop at blank line (often ends the SQL)
+        # 2) Stop at blank line (often ends the SQL or begins explanations)
         if "\n\n" in text or "\r\n\r\n" in text:
             return True
 
-        # 3) Stop if model starts emitting prompt headers again
-        if "###" in text:
-            return True
+        # 3) Stop on drift markers (chat artifacts / explanations / headers)
+        for m in DRIFT_MARKERS:
+            if m in text:
+                return True
 
         return False
 
@@ -58,28 +75,43 @@ class QwenAgent:
         print(f"⏳ Loading {MODEL_ID} locally... (this might take a minute)")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.debug = debug
-        
+
         self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+        # Qwen instruct models typically work best with chat templates.
+        # Also: device_map should NOT be "cuda"/"cpu"; use "auto" or move the model manually.
+        # We'll do the simplest reliable approach: load then .to(device).
         self.model = AutoModelForCausalLM.from_pretrained(
             MODEL_ID,
-            torch_dtype=torch.float32, 
-            device_map=self.device
-        )
-        self.model.eval()
-        self.max_ctx = getattr(self.model.config, "n_positions", 1024)
+            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+        ).to(self.device)
 
-        # Prompt pieces
+        self.model.eval()
+
+        # Ensure pad token exists
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # Context length (use best available config field)
+        self.max_ctx = (
+            getattr(self.model.config, "max_position_embeddings", None)
+            or getattr(self.model.config, "n_positions", None)
+            or 4096
+        )
+
+        # Prompt pieces (used if chat template is unavailable for some reason)
         self._prefix = "### Database schema:\n"
         self._rules = (
             "\n\n### Rules:\n"
             "- Use ONLY table and column names from the schema.\n"
             "- Do NOT invent table or column names.\n"
             "- Return exactly ONE SQL query.\n"
+            "- Output ONLY SQL (no explanation).\n"
             "- End the query with a semicolon (\";\").\n"
         )
         self._mid = "\n\n### Question:\n"
-        # Keep SELECT anchor, but include a lightweight format hint (no dataset-specific example).
-        self._suffix_template = "\n\n### SQL:\nSELECT "
+        # Strong suffix anchor
+        self._suffix_template = "\n\n### SQL:\n-- Output one SQL statement ending with ;\nSELECT "
 
         # Pre-tokenize constant segments
         self._prefix_ids = self.tokenizer(self._prefix, add_special_tokens=False).input_ids
@@ -87,12 +119,15 @@ class QwenAgent:
         self._mid_ids = self.tokenizer(self._mid, add_special_tokens=False).input_ids
         self._suffix_ids = self.tokenizer(self._suffix_template, add_special_tokens=False).input_ids
 
-        # Bad phrases to reduce prompt-channel drift and known degeneracy ("ids").
+        # Bad phrases to reduce prompt-channel drift.
         self._bad_phrases = [
             "###",
             "Database schema",
             "Question",
             "Rules",
+            "Explanation",
+            "Human:",
+            "Assistant:",
         ]
         self._bad_words_ids = [
             self.tokenizer(p, add_special_tokens=False).input_ids
@@ -100,10 +135,10 @@ class QwenAgent:
             if len(self.tokenizer(p, add_special_tokens=False).input_ids) > 0
         ]
 
-        # Force " FROM " somewhere in the output to reduce SELECT-lists without FROM.
+        # Force " FROM " somewhere in output to reduce SELECT-lists without FROM.
         self._force_from_ids = self.tokenizer(" FROM ", add_special_tokens=False).input_ids
 
-        # Markers that indicate template/garbage outputs (reject candidates that contain them).
+        # Markers that indicate template/garbage outputs.
         self._reject_markers = [
             "????",
             "<columns>",
@@ -111,7 +146,6 @@ class QwenAgent:
             "<condition>",
             "----------------",
         ]
-
 
         print(f"✅ Model loaded on {self.device.upper()}")
 
@@ -169,12 +203,37 @@ class QwenAgent:
     # ----------------------------
     # Prompt building / truncation
     # ----------------------------
-    def build_prompt(self, schema: str, question: str) -> str:
-        tables_view = self._schema_to_tables_bullets(schema)
-        schema_block = tables_view if tables_view else schema
+    def _build_chat_prompt(self, schema: str, question: str) -> str:
+        """
+        Preferred: use chat template for instruct model.
+        Returns a text prompt ready for tokenization.
+        """
+        sys_msg = (
+            "You are a SQL generator.\n"
+            "Return exactly ONE SQL query.\n"
+            "Use ONLY the provided schema tables/columns.\n"
+            "Output ONLY SQL (no explanation, no markdown).\n"
+            "End the SQL with a semicolon."
+        )
+        user_msg = (
+            f"Database schema:\n{schema}\n\n"
+            f"Question:\n{question}\n\n"
+            f"Return the SQL now."
+        )
 
+        # Use chat template if available
+        if hasattr(self.tokenizer, "apply_chat_template"):
+            messages = [
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": user_msg},
+            ]
+            return self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+
+        # Fallback to old-style prompt
         return (
-            f"{self._prefix}{schema_block}"
+            f"{self._prefix}{schema}"
             f"{self._rules}"
             f"{self._mid}{question}"
             f"{self._suffix_template}"
@@ -183,7 +242,7 @@ class QwenAgent:
     def _truncate_schema_by_lines(self, schema: str, schema_budget_tokens: int) -> str:
         """
         Keep whole lines (tables) until token budget is met.
-        This prevents cutting identifiers mid-token and preserves structure.
+        Prevents cutting identifiers mid-token and preserves structure.
         """
         if schema_budget_tokens <= 0:
             return ""
@@ -205,12 +264,15 @@ class QwenAgent:
         if budget <= 0:
             raise ValueError(f"max_new_tokens={max_new_tokens} leaves no room for prompt in ctx={self.max_ctx}")
 
-        # Use tables bullets view for copyability; truncate by lines.
+        # For chat template, we need to rebuild prompt after truncation.
+        # We'll truncate schema by lines using token budget estimated from fallback segments.
         tables_view = self._schema_to_tables_bullets(schema)
         schema_full = tables_view if tables_view else schema
 
+        # Tokenize question alone (for rough budgeting)
         question_ids = self.tokenizer(question, add_special_tokens=False).input_ids
 
+        # Rough fixed len (fallback prompt pieces) – good enough to decide schema truncation.
         fixed_len = (
             len(self._prefix_ids)
             + len(self._rules_ids)
@@ -219,13 +281,14 @@ class QwenAgent:
             + len(self._suffix_ids)
         )
 
-        # If question too long, truncate (rare)
         if fixed_len > budget:
             keep = max(
                 32,
                 budget - (len(self._prefix_ids) + len(self._rules_ids) + len(self._mid_ids) + len(self._suffix_ids))
             )
             question_ids = question_ids[-keep:]
+            question = self.tokenizer.decode(question_ids, skip_special_tokens=True)
+
             fixed_len = (
                 len(self._prefix_ids)
                 + len(self._rules_ids)
@@ -236,23 +299,58 @@ class QwenAgent:
 
         schema_budget = max(0, budget - fixed_len)
         schema_trunc = self._truncate_schema_by_lines(schema_full, schema_budget)
-        schema_ids = self.tokenizer(schema_trunc, add_special_tokens=False).input_ids
 
-        input_ids = self._prefix_ids + schema_ids + self._rules_ids + self._mid_ids + question_ids + self._suffix_ids
-        attn = [1] * len(input_ids)
+        prompt = self._build_chat_prompt(schema_trunc, question)
+        inputs = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         return {
-            "input_ids": torch.tensor([input_ids], device=self.device),
-            "attention_mask": torch.tensor([attn], device=self.device),
-            "input_len": len(input_ids),
+            **inputs,
+            "input_len": int(inputs["input_ids"].shape[1]),
+            "prompt_text": prompt,
         }
 
     # ----------------------------
     # SQL extraction / sanitation / gating
     # ----------------------------
     @staticmethod
-    def _extract_sql(text: str) -> str:
-        # Stop at first semicolon if present, else first blank line or line break
+    def _sanitize_sql_text(s: str) -> str:
+        s = s.replace("\u00A0", " ").replace("\u2007", " ").replace("\u202F", " ")
+        s = s.replace("\r\n", "\n")
+        return s
+
+    @staticmethod
+    def _strip_string_literals(s: str) -> str:
+        s = re.sub(r"'([^'\\]|\\.)*'", "''", s)
+        s = re.sub(r'"([^"\\]|\\.)*"', '""', s)
+        return s
+
+    @staticmethod
+    def _cut_on_drift_markers(s: str) -> str:
+        """
+        If generation appended non-SQL content on the same line (no semicolon/newline),
+        cut at the earliest drift marker.
+        """
+        cut_points = []
+        for m in DRIFT_MARKERS:
+            idx = s.find(m)
+            if idx != -1:
+                cut_points.append(idx)
+        if cut_points:
+            return s[: min(cut_points)].strip()
+        return s.strip()
+
+    @classmethod
+    def _extract_sql(cls, text: str) -> str:
+        """
+        Extract a single SQL statement from text.
+        Priority:
+          1) first semicolon
+          2) blank line / newline
+          3) drift markers (Explanation/Human/etc.)
+        """
+        text = text.strip()
+
         semi = text.find(";")
         if semi != -1:
             return text[: semi + 1].strip()
@@ -262,49 +360,27 @@ class QwenAgent:
             if idx != -1:
                 return text[:idx].strip()
 
-        return text.strip()
-
-    @staticmethod
-    def _sanitize_sql_text(s: str) -> str:
-        # Replace NBSP and other weird spaces with normal spaces
-        s = s.replace("\u00A0", " ").replace("\u2007", " ").replace("\u202F", " ")
-        # Normalize newlines
-        s = s.replace("\r\n", "\n")
-        return s
-
-    @staticmethod
-    def _strip_string_literals(s: str) -> str:
-        # Replace quoted strings to avoid capturing identifiers inside them.
-        s = re.sub(r"'([^'\\]|\\.)*'", "''", s)
-        s = re.sub(r'"([^"\\]|\\.)*"', '""', s)
-        return s
+        # No delimiters: cut on drift markers if present
+        return cls._cut_on_drift_markers(text)
 
     def _extract_identifiers(self, sql: str) -> Tuple[set[str], set[str]]:
         """
         Lightweight identifier extraction for gating (NOT a SQL parser).
         Returns (tables_used, cols_used) in lowercase.
-
-        - tables: tokens after FROM/JOIN
-        - aliases: collected from FROM/JOIN ... [AS] alias
-        - cols: dotted references + bare identifiers (excluding SQL keywords/tables/aliases)
         """
         s = sql.lower()
         s = self._strip_string_literals(s)
 
-        # tables after FROM/JOIN
         tables = set(re.findall(r"\bfrom\s+([a-z_][a-z0-9_]*)\b", s))
         tables |= set(re.findall(r"\bjoin\s+([a-z_][a-z0-9_]*)\b", s))
 
-        # aliases after FROM/JOIN
         alias_pairs = re.findall(r"\bfrom\s+([a-z_][a-z0-9_]*)\s+(?:as\s+)?([a-z_][a-z0-9_]*)\b", s)
         alias_pairs += re.findall(r"\bjoin\s+([a-z_][a-z0-9_]*)\s+(?:as\s+)?([a-z_][a-z0-9_]*)\b", s)
         aliases = {alias for (_, alias) in alias_pairs}
 
-        # dotted references: t.col / a.col
         dotted = re.findall(r"\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b", s)
         cols = {c for (_, c) in dotted}
 
-        # bare identifiers: any word-like token that's not a keyword/table/alias
         tokens = re.findall(r"\b[a-z_][a-z0-9_]*\b", s)
         for tok in tokens:
             if tok in SQL_KEYWORDS:
@@ -321,22 +397,28 @@ class QwenAgent:
 
     def _ok(self, sql: str) -> bool:
         return not any(m in sql for m in self._reject_markers)
-    
+
     # ----------------------------
     # Main generation
     # ----------------------------
-    def generate_sql(self, schema: str, question: str, max_new_tokens: int = 128, max_time: float | None = None) -> str:
-        inputs = self._make_inputs_under_limit(schema, question, max_new_tokens=max_new_tokens)
-        input_len = inputs.pop("input_len")
+    def generate_sql(
+        self,
+        schema: str,
+        question: str,
+        max_new_tokens: int = 128,
+        max_time: Optional[float] = None,
+    ) -> str:
+        pack = self._make_inputs_under_limit(schema, question, max_new_tokens=max_new_tokens)
+        input_len = pack.pop("input_len")
+        prompt_text = pack.pop("prompt_text", "")
 
         stopping = StoppingCriteriaList([_SQLStoppingCriteria(self.tokenizer, input_len)])
 
-        # schema whitelist (use original compact schema, not bullet view)
         allowed_tables, allowed_cols = self._parse_schema_identifiers(schema)
 
         with torch.no_grad():
             out = self.model.generate(
-                **inputs,
+                **pack,
                 max_new_tokens=max_new_tokens,
 
                 # deterministic beam search
@@ -346,7 +428,10 @@ class QwenAgent:
                 early_stopping=True,
                 length_penalty=0.9,
 
-                # stop when we see ';' / blank line / header drift
+                temperature=None,
+                top_p=None,
+                top_k=None,
+
                 stopping_criteria=stopping,
 
                 pad_token_id=self.tokenizer.eos_token_id,
@@ -354,6 +439,7 @@ class QwenAgent:
 
                 bad_words_ids=self._bad_words_ids if self._bad_words_ids else None,
                 force_words_ids=[self._force_from_ids],
+
                 return_dict_in_generate=True,
                 output_scores=True,
 
@@ -363,11 +449,8 @@ class QwenAgent:
         seqs = out.sequences
         seq_scores = getattr(out, "sequences_scores", None)
 
-        # Keep raw candidates for fallback selection
         raw_candidates: List[Tuple[float, str]] = []
         raw_with_from: List[Tuple[float, str]] = []
-
-        # Valid candidates after gating
         candidates: List[Tuple[float, str]] = []
 
         for i in range(seqs.size(0)):
@@ -375,9 +458,36 @@ class QwenAgent:
             gen_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True)
             gen_text = self._sanitize_sql_text(gen_text)
 
-            candidate = "SELECT " + gen_text
-            candidate = self._sanitize_sql_text(candidate)
-            sql = self._extract_sql(candidate).strip()
+            # Some chat templates may re-emit parts; keep extraction robust.
+            # Build candidate anchored at SELECT to reduce leading noise.
+            # 1) Strip fenced code blocks if present
+            gen_text_clean = gen_text
+            m = re.search(r"```(?:sql)?\s*(.*?)\s*```", gen_text_clean, re.DOTALL | re.IGNORECASE)
+            if m:
+                gen_text_clean = m.group(1).strip()
+
+            gen_text_clean = self._sanitize_sql_text(gen_text_clean).strip()
+
+            # 2) Extract one SQL statement (handles semicolon/newline/drift)
+            sql = self._extract_sql(gen_text_clean).strip()
+
+            # 3) Anchor only if needed (avoid SELECT SELECT)
+            if not re.match(r"^\s*select\b", sql, flags=re.IGNORECASE):
+                sql = "SELECT " + sql
+
+            sql = sql.strip()
+
+            # Ensure single trailing semicolon if it exists somewhere
+            if ";" in sql:
+                sql = sql.split(";", 1)[0].strip() + ";"
+
+
+            # final “same-line drift” safety net
+            sql = self._cut_on_drift_markers(sql)
+
+            # If the prompt leaked into decoded text (rare), drop it.
+            if prompt_text and sql.startswith(prompt_text):
+                sql = sql[len(prompt_text):].strip()
 
             score = float(seq_scores[i].item()) if seq_scores is not None else 0.0
 
@@ -385,15 +495,12 @@ class QwenAgent:
             if " from " in f" {sql.lower()} ":
                 raw_with_from.append((score, sql))
 
-            # Reject obvious template/garbage placeholders
             if any(m in sql for m in self._reject_markers):
                 continue
 
-            # Must contain FROM (these datasets are overwhelmingly SELECT-FROM-WHERE)
             if " from " not in f" {sql.lower()} ":
                 continue
 
-            # Identifier gate (tables + columns, including bare columns)
             used_tables, used_cols = self._extract_identifiers(sql)
 
             if used_tables and not used_tables.issubset(allowed_tables):
@@ -404,7 +511,6 @@ class QwenAgent:
 
             candidates.append((score, sql))
 
-        # If nothing passes, fallback to best candidate that at least contains FROM; else best raw.
         if not candidates:
             raw_with_from_ok = [(sc, s) for sc, s in raw_with_from if self._ok(s)]
             if raw_with_from_ok:
@@ -420,7 +526,6 @@ class QwenAgent:
                     chosen = raw_candidates[0][1] if raw_candidates else ""
             return chosen.strip()
 
-        # pick best score among valid candidates
         candidates.sort(key=lambda x: x[0], reverse=True)
         best_sql = candidates[0][1].strip()
 

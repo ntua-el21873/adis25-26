@@ -80,9 +80,6 @@ def pred_vs_gold_match(pred_res: Optional[dict], gold_res: Optional[dict]) -> bo
     """
     Execution-based equivalence.
     """
-    print("--- PRED VS GOLD MATCH ---")
-    print(pred_res)
-    print(gold_res)
     if not pred_res or not gold_res:
         return False
     if not pred_res.get("success") or not gold_res.get("success"):
@@ -94,6 +91,25 @@ def pred_vs_gold_match(pred_res: Optional[dict], gold_res: Optional[dict]) -> bo
         return bool(compare_results(pred_df, gold_df))
 
     return False
+
+def count_prompt_tokens_effective(
+    agent: QwenAgent, schema_compact: str, question: str, max_new_tokens: int
+) -> int:
+    """
+    EXACT prompt token count as actually fed into model, including truncation logic.
+
+    We call the agent's internal prompt constructor/truncation helper and count
+    the resulting input_ids length.
+
+    This is the correct "prompt_tokens" for prompt complexity and context pressure.
+    """
+    inputs = agent._make_inputs_under_limit(
+        schema_compact, question, max_new_tokens=max_new_tokens
+    )
+    # inputs["input_ids"] is shape [1, seq_len]
+    return int(inputs["input_ids"].shape[1])
+
+
 # -----------------------------------------------------------------------------
 # Main Execution
 # -----------------------------------------------------------------------------
@@ -200,6 +216,13 @@ def main():
                     schema_compact
                 )
 
+                prompt_tokens = count_prompt_tokens_effective(
+                    agent,
+                    schema_compact,
+                    question_text_filled,
+                    max_new_tokens=args.max_new_tokens,
+                )
+
                 # Prepare Gold SQL for execution
                 gold_sql_exec = fill_gold_sql(entry, sentence)
                 gold_sql_exec = normalize_table_case(gold_sql_exec, table_map)
@@ -264,8 +287,7 @@ def main():
                     "schema_num_tables": schema_num_tables,
                     "schema_num_columns": schema_num_columns,
                     
-                    #"prompt_tokens": p_tokens,
-                    #"completion_tokens": c_tokens,
+                    "prompt_tokens": prompt_tokens,
                     # Prediction Info
                     "pred_sql_raw": pred_sql_raw,
                     "pred_sql": pred_sql_fixed,
@@ -290,7 +312,7 @@ def main():
                 print(
                     f"[{row_id}] qsplit={query_split or '-'} "
                     f"pred={pred_ok} gold={gold_ok} ex={acc} "
-                    f"tables={schema_num_tables} prompt_tokens=unknown"
+                    f"tables={schema_num_tables} prompt_tokens={prompt_tokens}"
                 )
 
                 row_id += 1
