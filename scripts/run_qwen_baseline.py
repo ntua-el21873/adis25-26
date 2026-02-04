@@ -361,6 +361,7 @@ def main():
                         schema=schema_compact,
                         question=question_text_filled,
                         max_new_tokens=args.max_new_tokens,
+                        max_time=240.0,  # 4 minutes per query
                     )
                 except Exception as e:
                     skipped += 1
