@@ -6,14 +6,11 @@ Enhanced database manager with support for text2sql datasets
 from typing import Dict, List, Set
 import pandas as pd
 import time
-import json
-from pyparsing import Dict
-from pathlib import Path
 from sqlalchemy import text, inspect
 from database.connection import get_engine
 import re
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 class DatabaseManager:

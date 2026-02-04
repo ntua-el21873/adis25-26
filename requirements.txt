@@ -1,39 +1,38 @@
 # -----------------------------
 # Core database + ORM
 # -----------------------------
-SQLAlchemy
-PyMySQL
+SQLAlchemy==2.0.36
+PyMySQL==1.1.1
 
 # -----------------------------
 # Data handling & utilities
 # -----------------------------
-
-numpy
-pandas
-tqdm
+numpy==2.1.3
+pandas==2.2.3
+tqdm==4.67.1
 
 # -----------------------------
 # LLM models & acceleration
 # -----------------------------
-transformers
-torch
-accelerate
+transformers==4.45.2
+tokenizers==0.20.3
+torch==2.5.1
+accelerate==0.34.2
 
 
 # -----------------------------
 # Configuration & environment
 # -----------------------------
-python-dotenv
+python-dotenv==1.0.1
 
 # -----------------------------
 # HTTP / API access
 # (used later for GPT / Qwen)
 # -----------------------------
-requests
+requests==2.32.3
 
 # -----------------------------
 # Optional: notebooks / analysis
 # (safe to include; not required at runtime)
 # -----------------------------
-jupyterlab
-matplotlib
+matplotlib==3.9.2
