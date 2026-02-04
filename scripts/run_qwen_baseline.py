@@ -8,7 +8,7 @@ Differences from GPT-2 script:
 - Removed prompt truncation logic (Qwen context window is large enough).
 - Uses QwenAgent instead of GPT2XLAgent.
 """
-
+import re
 import argparse
 import json
 import sys
@@ -92,6 +92,7 @@ def pred_vs_gold_match(pred_res: Optional[dict], gold_res: Optional[dict]) -> bo
 
     return False
 
+
 def count_prompt_tokens_effective(
     agent: QwenAgent, schema_compact: str, question: str, max_new_tokens: int
 ) -> int:
@@ -110,7 +111,119 @@ def count_prompt_tokens_effective(
     return int(inputs["input_ids"].shape[1])
 
 
-# -----------------------------------------------------------------------------
+def _count_from_sources(sql_upper: str) -> int:
+    """
+    Count number of table sources in FROM clause:
+    - supports implicit joins (comma-separated)
+    - supports explicit JOINs
+    """
+    m = re.search(
+        r"\bFROM\b(.*?)(\bWHERE\b|\bGROUP\s+BY\b|\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|\bUNION\b|\bINTERSECT\b|\bEXCEPT\b|;|$)",
+        sql_upper,
+        flags=re.DOTALL,
+    )
+    if not m:
+        return 0
+
+    from_part = m.group(1)
+
+    # Remove anything inside parentheses to avoid counting subquery FROMs as sources here
+    # (we already score subqueries separately via SELECT count)
+    from_part_no_parens = re.sub(r"\([^()]*\)", " ", from_part)
+
+    # Implicit joins: tables separated by commas
+    comma_sources = 0
+    if from_part_no_parens.strip():
+        comma_sources = from_part_no_parens.count(",") + 1
+
+    # Explicit joins: each JOIN introduces another source
+    join_sources = len(re.findall(r"\bJOIN\b", from_part_no_parens))
+
+    # If JOIN syntax is used, sources are typically (1 + #JOIN)
+    # If comma syntax is used, sources are (1 + #commas)
+    # If both appear (rare), take the max to be safe.
+    return max(comma_sources, 1 + join_sources if join_sources > 0 else 0)
+
+
+
+def read_last_row_id(jsonl_path: Path) -> int:
+    if not jsonl_path.exists() or jsonl_path.stat().st_size == 0:
+        return -1
+
+    last_id = -1
+    with jsonl_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if "id" in obj and isinstance(obj["id"], int):
+                    last_id = max(last_id, obj["id"])
+            except json.JSONDecodeError:
+                # ignore malformed lines
+                pass
+    return last_id
+
+
+# ----------------------------
+# SQL difficulty scoring
+# ----------------------------
+
+
+def sql_difficulty_1to4(sql: str) -> int:
+    s = sql.upper()
+
+    # core complexity signals
+    selects = len(re.findall(r"\bSELECT\b", s))
+    subqueries = max(0, selects - 1)
+
+    has_group = "GROUP BY" in s
+    has_having = "HAVING" in s
+    has_set_ops = any(op in s for op in ("UNION", "INTERSECT", "EXCEPT"))
+
+    sources = _count_from_sources(s)  # implicit/explicit join proxy
+
+    # Difficulty 4
+    if has_set_ops or subqueries >= 2 or sources >= 4:
+        return 4
+
+    # Difficulty 3
+    if subqueries == 1 or has_having or sources == 3:
+        return 3
+
+    # Difficulty 2
+    if has_group or sources == 2:
+        return 2
+
+    # Difficulty 1
+    return 1
+
+
+def get_difficulty(entry: dict, sentence: dict) -> int:
+    """
+    Return difficulty score in {1,2,3,4}.
+    Always defined.
+    Priority:
+      1) sentence["difficulty"]
+      2) entry["difficulty"]
+      3) derived from gold SQL structure
+    """
+
+    # Dataset-provided difficulty (preferred)
+    if isinstance(sentence, dict) and "difficulty" in sentence:
+        return int(sentence["difficulty"])
+    if isinstance(entry, dict) and "difficulty" in entry:
+        return int(entry["difficulty"])
+
+    # Derive from SQL
+    sql_list = entry.get("sql", [])
+
+    if not sql_list:
+        return 1  # default to easiest if no SQL
+    return sql_difficulty_1to4(str(sql_list[0]))
+
+#  -----------------------------------------------------------------------------
 # Main Execution
 # -----------------------------------------------------------------------------
 
@@ -163,6 +276,11 @@ def main():
     print(f"Max new tokens: {args.max_new_tokens}")
     print("=" * 80)
 
+    last_id = read_last_row_id(out_path)
+    resume_from = 0
+    if last_id >= 0:
+        resume_from = last_id + 1
+
     try:
         data = load_dataset(dataset_path)
     except Exception as e:
@@ -185,7 +303,8 @@ def main():
     skipped = 0
 
     # 3. Processing Loop
-    with out_path.open("w", encoding="utf-8") as f:
+    mode = "a" if out_path.exists() and out_path.stat().st_size > 0 else "w"
+    with out_path.open(mode, encoding="utf-8") as f:
         for entry in data:
             # Metadata
             query_split = entry.get("query-split", "")
@@ -194,17 +313,22 @@ def main():
                 sql_variants = [str(sql_variants)]
             gold_sql_first = sql_variants[0] if sql_variants else ""
 
-            difficulty = entry.get("difficulty", "unknown")
             # Iterate over paraphrases (sentences) - EXACTLY as GPT-2 does
             sentences = entry.get("sentences", [])
             for sentence in sentences:
                 if args.limit > 0 and questions_processed >= args.limit:
                     break
+
+                if row_id < resume_from:
+                    row_id += 1
+                    continue
+
                 question_text = sentence.get("text", "")
                 question_vars = sentence.get("variables", {})
                 question_text_filled = fill_question_text(question_text, question_vars)
 
                 question_split = sentence.get("question-split", "")
+                difficulty = get_difficulty(entry, sentence)
 
                 # Prepare compact schema
                 schema_compact = db_manager.get_compact_schema(
