@@ -1,9 +1,4 @@
 /*M!999999\- enable the sandbox mode */ 
--- MariaDB dump 10.19-11.2.6-MariaDB, for debian-linux-gnu (x86_64)
---
--- Host: localhost    Database: atis
--- ------------------------------------------------------
--- Server version	11.2.6-MariaDB-ubu2204
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
@@ -15,11 +10,6 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
-
---
--- Table structure for table `aircraft`
---
-
 DROP TABLE IF EXISTS `aircraft`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -60,11 +50,6 @@ CREATE TABLE `aircraft` (
   KEY `aircraft_code_2` (`aircraft_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `airline`
---
-
 DROP TABLE IF EXISTS `airline`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -76,11 +61,6 @@ CREATE TABLE `airline` (
   KEY `airline_code` (`airline_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `airport`
---
-
 DROP TABLE IF EXISTS `airport`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -101,11 +81,6 @@ CREATE TABLE `airport` (
   KEY `minimum_connect_time` (`minimum_connect_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `airport_service`
---
-
 DROP TABLE IF EXISTS `airport_service`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -122,11 +97,6 @@ CREATE TABLE `airport_service` (
   KEY `direction` (`direction`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `city`
---
-
 DROP TABLE IF EXISTS `city`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -143,11 +113,6 @@ CREATE TABLE `city` (
   KEY `time_zone_code` (`time_zone_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `class_of_service`
---
-
 DROP TABLE IF EXISTS `class_of_service`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -159,11 +124,6 @@ CREATE TABLE `class_of_service` (
   KEY `rank` (`rank`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `code_description`
---
-
 DROP TABLE IF EXISTS `code_description`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -173,11 +133,6 @@ CREATE TABLE `code_description` (
   PRIMARY KEY (`code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `compartment_class`
---
-
 DROP TABLE IF EXISTS `compartment_class`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -188,11 +143,6 @@ CREATE TABLE `compartment_class` (
   KEY `class_type` (`class_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `date_day`
---
-
 DROP TABLE IF EXISTS `date_day`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -207,11 +157,6 @@ CREATE TABLE `date_day` (
   KEY `day_name` (`day_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `days`
---
-
 DROP TABLE IF EXISTS `days`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -222,11 +167,6 @@ CREATE TABLE `days` (
   KEY `day_name` (`day_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `dual_carrier`
---
-
 DROP TABLE IF EXISTS `dual_carrier`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -242,11 +182,6 @@ CREATE TABLE `dual_carrier` (
   KEY `dual_airline` (`dual_airline`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `equipment_sequence`
---
-
 DROP TABLE IF EXISTS `equipment_sequence`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -257,11 +192,6 @@ CREATE TABLE `equipment_sequence` (
   KEY `aircraft_code_sequence` (`aircraft_code_sequence`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `fare`
---
-
 DROP TABLE IF EXISTS `fare`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -286,11 +216,6 @@ CREATE TABLE `fare` (
   KEY `to_airport` (`to_airport`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `fare_basis`
---
-
 DROP TABLE IF EXISTS `fare_basis`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -314,11 +239,6 @@ CREATE TABLE `fare_basis` (
   KEY `fare_basis_economy` (`economy`(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `flight`
---
-
 DROP TABLE IF EXISTS `flight`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -356,11 +276,6 @@ CREATE TABLE `flight` (
   KEY `to_airport` (`to_airport`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `flight_fare`
---
-
 DROP TABLE IF EXISTS `flight_fare`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -372,11 +287,6 @@ CREATE TABLE `flight_fare` (
   KEY `flight_id_2` (`flight_id`,`fare_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `flight_leg`
---
-
 DROP TABLE IF EXISTS `flight_leg`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -389,11 +299,6 @@ CREATE TABLE `flight_leg` (
   KEY `leg_flight` (`leg_flight`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `flight_stop`
---
-
 DROP TABLE IF EXISTS `flight_stop`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -416,11 +321,6 @@ CREATE TABLE `flight_stop` (
   KEY `flight_id` (`flight_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `food_service`
---
-
 DROP TABLE IF EXISTS `food_service`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -435,11 +335,6 @@ CREATE TABLE `food_service` (
   KEY `meal_description` (`meal_description`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `ground_service`
---
-
 DROP TABLE IF EXISTS `ground_service`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -453,11 +348,6 @@ CREATE TABLE `ground_service` (
   KEY `ground_service_city_code` (`city_code`(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `month`
---
-
 DROP TABLE IF EXISTS `month`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -466,11 +356,6 @@ CREATE TABLE `month` (
   `month_name` text DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `restriction`
---
-
 DROP TABLE IF EXISTS `restriction`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -489,11 +374,6 @@ CREATE TABLE `restriction` (
   KEY `restriction_saturday_stay_required` (`saturday_stay_required`(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `state`
---
-
 DROP TABLE IF EXISTS `state`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -505,11 +385,6 @@ CREATE TABLE `state` (
   KEY `state_state_name` (`state_name`(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `time_interval`
---
-
 DROP TABLE IF EXISTS `time_interval`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -520,11 +395,6 @@ CREATE TABLE `time_interval` (
   KEY `time_interval_period` (`period`(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `time_zone`
---
-
 DROP TABLE IF EXISTS `time_zone`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -536,10 +406,6 @@ CREATE TABLE `time_zone` (
   KEY `time_zone_time_zone_code` (`time_zone_code`(100))
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping routines for database 'atis'
---
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -550,4 +416,3 @@ CREATE TABLE `time_zone` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-01-29 11:16:29

@@ -1,9 +1,4 @@
 /*M!999999\- enable the sandbox mode */ 
--- MariaDB dump 10.19-11.2.6-MariaDB, for debian-linux-gnu (x86_64)
---
--- Host: localhost    Database: advising
--- ------------------------------------------------------
--- Server version	11.2.6-MariaDB-ubu2204
 
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
@@ -15,11 +10,6 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
-
---
--- Table structure for table `AREA`
---
-
 DROP TABLE IF EXISTS `AREA`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -28,11 +18,6 @@ CREATE TABLE `AREA` (
   `area` varchar(30) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `COMMENT_INSTRUCTOR`
---
-
 DROP TABLE IF EXISTS `COMMENT_INSTRUCTOR`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -44,11 +29,6 @@ CREATE TABLE `COMMENT_INSTRUCTOR` (
   PRIMARY KEY (`instructor_id`,`student_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `COURSE`
---
-
 DROP TABLE IF EXISTS `COURSE`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -74,11 +54,6 @@ CREATE TABLE `COURSE` (
   PRIMARY KEY (`COURSE_ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `COURSE_OFFERING`
---
-
 DROP TABLE IF EXISTS `COURSE_OFFERING`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -106,11 +81,6 @@ CREATE TABLE `COURSE_OFFERING` (
   CONSTRAINT `COURSE_OFFERING_ibfk_1` FOREIGN KEY (`COURSE_ID`) REFERENCES `COURSE` (`COURSE_ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `COURSE_PREREQUISITE`
---
-
 DROP TABLE IF EXISTS `COURSE_PREREQUISITE`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -120,11 +90,6 @@ CREATE TABLE `COURSE_PREREQUISITE` (
   PRIMARY KEY (`course_id`,`pre_course_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `COURSE_TAGS_COUNT`
---
-
 DROP TABLE IF EXISTS `COURSE_TAGS_COUNT`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -153,11 +118,6 @@ CREATE TABLE `COURSE_TAGS_COUNT` (
   PRIMARY KEY (`COURSE_ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `GSI`
---
-
 DROP TABLE IF EXISTS `GSI`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -167,11 +127,6 @@ CREATE TABLE `GSI` (
   PRIMARY KEY (`course_offering_id`,`student_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `INSTRUCTOR`
---
-
 DROP TABLE IF EXISTS `INSTRUCTOR`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -182,11 +137,6 @@ CREATE TABLE `INSTRUCTOR` (
   PRIMARY KEY (`INSTRUCTOR_ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `OFFERING_INSTRUCTOR`
---
-
 DROP TABLE IF EXISTS `OFFERING_INSTRUCTOR`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -201,11 +151,6 @@ CREATE TABLE `OFFERING_INSTRUCTOR` (
   CONSTRAINT `OFFERING_INSTRUCTOR_ibfk_2` FOREIGN KEY (`INSTRUCTOR_ID`) REFERENCES `INSTRUCTOR` (`INSTRUCTOR_ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `PROGRAM`
---
-
 DROP TABLE IF EXISTS `PROGRAM`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -217,11 +162,6 @@ CREATE TABLE `PROGRAM` (
   PRIMARY KEY (`program_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `PROGRAM_COURSE`
---
-
 DROP TABLE IF EXISTS `PROGRAM_COURSE`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -233,11 +173,6 @@ CREATE TABLE `PROGRAM_COURSE` (
   PRIMARY KEY (`program_id`,`course_id`,`category`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `PROGRAM_REQUIREMENT`
---
-
 DROP TABLE IF EXISTS `PROGRAM_REQUIREMENT`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -249,11 +184,6 @@ CREATE TABLE `PROGRAM_REQUIREMENT` (
   PRIMARY KEY (`program_id`,`category`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `SEMESTER`
---
-
 DROP TABLE IF EXISTS `SEMESTER`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -264,11 +194,6 @@ CREATE TABLE `SEMESTER` (
   PRIMARY KEY (`semester_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `STUDENT`
---
-
 DROP TABLE IF EXISTS `STUDENT`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -289,11 +214,6 @@ CREATE TABLE `STUDENT` (
   PRIMARY KEY (`student_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Table structure for table `STUDENT_RECORD`
---
-
 DROP TABLE IF EXISTS `STUDENT_RECORD`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8 */;
@@ -314,10 +234,6 @@ CREATE TABLE `STUDENT_RECORD` (
   CONSTRAINT `STUDENT_RECORD_ibfk_2` FOREIGN KEY (`course_id`) REFERENCES `COURSE` (`COURSE_ID`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-
---
--- Dumping routines for database 'advising'
---
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -328,4 +244,3 @@ CREATE TABLE `STUDENT_RECORD` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-01-29 11:16:20

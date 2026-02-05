@@ -6,14 +6,11 @@ Enhanced database manager with support for text2sql datasets
 from typing import Dict, List, Set
 import pandas as pd
 import time
-import json
-from pyparsing import Dict
-from pathlib import Path
 from sqlalchemy import text, inspect
 from database.connection import get_engine
 import re
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 
 class DatabaseManager:
@@ -45,6 +42,36 @@ class DatabaseManager:
         print(f"✅ Connected to {self.db_type.upper()}")
         if database:
             print(f"   Database: {database}")
+        self._set_global_timeouts()  # best effort to prevent runaway queries
+
+    from sqlalchemy import text
+
+    def _set_global_timeouts(self):
+        """
+        Set GLOBAL statement execution timeouts on the server.
+        Important: GLOBAL changes apply only to NEW connections, so we dispose the engine.
+        """
+        try:
+            with self.engine.connect() as conn:
+                if self.db_type == "mysql":
+                    # milliseconds
+                    conn.execute(text("SET GLOBAL max_execution_time = :ms"), {"ms": 130000})
+                elif self.db_type == "mariadb":
+                    # seconds
+                    conn.execute(text("SET GLOBAL max_statement_time = :sec"), {"sec": 130})
+                else:
+                    return
+
+                conn.commit()
+
+            # Ensure pooled connections don't keep old settings
+            self.engine.dispose()
+
+            print(f"⏱️  Set GLOBAL timeout for {self.db_type.upper()} and disposed pool")
+
+        except Exception as e:
+            # Don't crash experiments; just warn loudly
+            print(f"⚠️  Could not set GLOBAL timeout for {self.db_type.upper()}: {e}")
 
     def execute_query(self, sql, params=None, timeout=30):
         """

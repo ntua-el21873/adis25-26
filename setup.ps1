@@ -125,7 +125,7 @@ $venvPath = "venv"
 $venvPython = Join-Path $venvPath "Scripts\python.exe"
 
 if (!(Test-Path $venvPython)) {
-    & python3 -m venv $venvPath
+    & py -3.12 -m venv $venvPath
     Ok "Virtual environment created at .\$venvPath"
 } else {
     Info "Virtual environment exists at .\$venvPath"
@@ -243,17 +243,17 @@ while ($true) {
 }
 
 # ----------------------------
-# Step 7: Extract schemas
+# Step 7: Bootstrap databases
 # ----------------------------
 Write-Host ""
-Write-Host "Step 7: Extracting database schemas..." -ForegroundColor Yellow
+Write-Host "Step 7: Bootstrapping database..." -ForegroundColor Yellow
 
-if (Test-Path "scripts\setup\extract_schemas.py") {
-    Info "Running extract_schemas.py..."
-    & $venvPython scripts\setup\extract_schemas.py
-    Ok "Database schema extraction complete"
+if (Test-Path "scripts\setup\bootstrap_databases.py") {
+    Info "Running bootstrap_databases.py..."
+    & $venvPython scripts\setup\bootstrap_databases.py
+    Ok "Database schema bootstrap complete"
 } else {
-    Warn "scripts\setup\extract_schemas.py not found, skipping..."
+    Warn "scripts\setup\bootstrap_databases.py not found, skipping..."
 }
 
 

@@ -4,7 +4,7 @@ scripts/extract_schemas.py
 DB Bootstrapper for Text2SQL experiments:
 - Resolve SQL assets per dataset (download or local file)
 - Ensure database exists (optional reset)
-- Import SQL into MySQL/MariaDB (SKIP if already populated, unless forced)
+- Import SQL into MySQL/MariaDB (SKIP if already imported, unless forced)
 - Dump schema-only snapshots (DDL) via mysqldump/mariadb-dump --no-data
 - Dump data-only snapshots (DML) via mysqldump/mariadb-dump --no-create-info
 
@@ -21,11 +21,15 @@ Usage examples:
   # Force reimport even if already populated
   python scripts/extract_schemas.py --force-import
 
+  # Skip imports entirely (DB managed by docker-entrypoint-initdb.d)
+  python scripts/extract_schemas.py --no-import
+
   # Skip dumps
   python scripts/extract_schemas.py --no-schema-dump --no-data-dump
 """
 
 import argparse
+import hashlib
 import os
 import subprocess
 from dataclasses import dataclass
@@ -76,7 +80,7 @@ DATASET_SQL_SOURCES: Dict[str, Dict] = {
 
 DEFAULT_DATASETS = ["advising", "atis", "imdb", "yelp"]
 
-# 
+# Expected table counts
 EXPECTED_TABLES = {
     "advising": 15,
     "atis": 25,
@@ -90,6 +94,9 @@ class DbCreds:
     root_password: str
 
 
+# -----------------------------
+# Subprocess helpers
+# -----------------------------
 def run(cmd: List[str], *, input_path: Optional[Path] = None) -> None:
     """Run a subprocess command, optionally piping a file to stdin."""
     if input_path is None:
@@ -99,6 +106,9 @@ def run(cmd: List[str], *, input_path: Optional[Path] = None) -> None:
             subprocess.run(cmd, check=True, stdin=f)
 
 
+# -----------------------------
+# Asset resolution (download/local)
+# -----------------------------
 def download_file(url: str, out_path: Path, force: bool = False) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if out_path.exists() and not force:
@@ -145,6 +155,9 @@ def resolve_sql_asset(dataset: str, force_download: bool) -> Optional[Path]:
     raise ValueError(f"Unknown SQL source type: {typ}")
 
 
+# -----------------------------
+# DB client/dump selectors
+# -----------------------------
 def _client_for(db_type: str) -> str:
     # Both images typically provide `mysql`; mariadb image also provides `mariadb`.
     # We'll use mariadb client for mariadb target to be explicit.
@@ -155,6 +168,9 @@ def _dump_for(db_type: str) -> str:
     return "mysqldump" if db_type == "mysql" else "mariadb-dump"
 
 
+# -----------------------------
+# Docker exec helpers
+# -----------------------------
 def docker_mysql_exec(db_type: str, creds: DbCreds, sql: str) -> None:
     """Execute a one-liner SQL command inside the container."""
     container = CONTAINERS[db_type]
@@ -169,9 +185,9 @@ def docker_mysql_exec(db_type: str, creds: DbCreds, sql: str) -> None:
     run(cmd)
 
 
-def docker_mysql_query_scalar(db_type: str, creds: DbCreds, sql: str) -> Optional[int]:
+def docker_mysql_query_scalar(db_type: str, creds: DbCreds, sql: str) -> Optional[str]:
     """
-    Execute a SQL statement inside the container and return the first cell as int.
+    Execute a SQL statement inside the container and return the first cell as string.
     Uses -N -s for machine-friendly output.
     """
     container = CONTAINERS[db_type]
@@ -189,14 +205,66 @@ def docker_mysql_query_scalar(db_type: str, creds: DbCreds, sql: str) -> Optiona
         s = out.decode("utf-8", errors="replace").strip()
         if not s:
             return None
-        return int(s.splitlines()[0].strip())
+        return s.splitlines()[0].strip()
     except Exception:
         return None
 
 
+# -----------------------------
+# Fast "already imported" marker
+# -----------------------------
+def sql_file_sha256(path: Path, chunk_size: int = 4 * 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            b = f.read(chunk_size)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def ensure_marker_table(db_type: str, creds: DbCreds, db_name: str) -> None:
+    docker_mysql_exec(
+        db_type, creds,
+        f"CREATE TABLE IF NOT EXISTS `{db_name}`.__import_marker ("
+        "id INT PRIMARY KEY, "
+        "import_hash VARCHAR(64) NOT NULL, "
+        "imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        ");"
+    )
+
+
+def get_import_hash(db_type: str, creds: DbCreds, db_name: str) -> Optional[str]:
+    """
+    Return stored import_hash if marker exists, else None.
+    """
+    q = (
+        f"SELECT import_hash FROM `{db_name}`.__import_marker WHERE id=1;"
+    )
+    return docker_mysql_query_scalar(db_type, creds, q)
+
+
+def set_import_hash(db_type: str, creds: DbCreds, db_name: str, import_hash: str) -> None:
+    ensure_marker_table(db_type, creds, db_name)
+    docker_mysql_exec(
+        db_type, creds,
+        f"INSERT INTO `{db_name}`.__import_marker (id, import_hash) "
+        f"VALUES (1, '{import_hash}') "
+        "ON DUPLICATE KEY UPDATE import_hash=VALUES(import_hash), imported_at=CURRENT_TIMESTAMP;"
+    )
+
+
+# -----------------------------
+# Legacy helpers (kept as fallback)
+# -----------------------------
 def db_exists(db_type: str, creds: DbCreds, db_name: str) -> bool:
     q = f"SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{db_name}';"
-    return (docker_mysql_query_scalar(db_type, creds, q) or 0) > 0
+    s = docker_mysql_query_scalar(db_type, creds, q)
+    try:
+        return int(s or "0") > 0
+    except Exception:
+        return False
 
 
 def table_count(db_type: str, creds: DbCreds, db_name: str) -> int:
@@ -205,22 +273,30 @@ def table_count(db_type: str, creds: DbCreds, db_name: str) -> int:
         "FROM INFORMATION_SCHEMA.TABLES "
         f"WHERE TABLE_SCHEMA = '{db_name}' AND TABLE_TYPE='BASE TABLE';"
     )
-    return int(docker_mysql_query_scalar(db_type, creds, q) or 0)
+    s = docker_mysql_query_scalar(db_type, creds, q)
+    try:
+        return int(s or "0")
+    except Exception:
+        return 0
 
 
-def is_already_imported(db_type: str, creds: DbCreds, db_name: str, min_tables: int = 1) -> bool:
+def is_already_imported_fallback(db_type: str, creds: DbCreds, db_name: str, min_tables: int = 1) -> bool:
     """
-    Heuristic: consider imported if DB exists and has >= min_tables base tables.
+    Fallback heuristic: consider imported if DB exists and has >= min_tables base tables.
+    (Used only if marker table is missing/unreadable.)
     """
     if not db_exists(db_type, creds, db_name):
         return False
     return table_count(db_type, creds, db_name) >= min_tables
 
 
+# -----------------------------
+# Import + DB creation
+# -----------------------------
 def docker_mysql_import_file(db_type: str, creds: DbCreds, dataset_db: str, sql_file: Path) -> None:
     """
     Import a .sql file into a specific database using docker exec + mysql stdin.
-    We call: mysql -uroot -p... <db> < file.sql
+    mysql -uroot -p... <db> < file.sql
     """
     container = CONTAINERS[db_type]
     client = _client_for(db_type)
@@ -246,12 +322,19 @@ def ensure_db(db_type: str, creds: DbCreds, db_name: str, reset: bool) -> None:
     )
 
 
-def extract_schema_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
+# -----------------------------
+# Dumps
+# -----------------------------
+def extract_schema_snapshot(db_type: str, creds: DbCreds, db_name: str, force: bool = False) -> None:
     """Dump schema-only (DDL) using mysqldump/mariadb-dump --no-data."""
     container = CONTAINERS[db_type]
     out_dir = DDL_OUT_DIR / db_type
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{db_name}.schema.sql"
+
+    if out_path.exists() and not force:
+        print(f"🧾 Schema snapshot already exists: {out_path}. Skipping.")
+        return
 
     dump = _dump_for(db_type)
     cmd = [
@@ -271,12 +354,16 @@ def extract_schema_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
         subprocess.run(cmd, check=True, stdout=f)
 
 
-def extract_data_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
+def extract_data_snapshot(db_type: str, creds: DbCreds, db_name: str, force: bool = False) -> None:
     """Dump data-only (DML inserts) using mysqldump/mariadb-dump --no-create-info."""
     container = CONTAINERS[db_type]
     out_dir = DML_OUT_DIR / db_type
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{db_name}.data.sql"
+
+    if out_path.exists() and not force:
+        print(f"🧾 Data snapshot already exists: {out_path}. Skipping.")
+        return
 
     dump = _dump_for(db_type)
     cmd = [
@@ -299,6 +386,9 @@ def extract_data_snapshot(db_type: str, creds: DbCreds, db_name: str) -> None:
         subprocess.run(cmd, check=True, stdout=f)
 
 
+# -----------------------------
+# Main
+# -----------------------------
 def main() -> int:
     load_dotenv()
 
@@ -330,7 +420,12 @@ def main() -> int:
     parser.add_argument(
         "--force-import",
         action="store_true",
-        help="Import SQL even if DB already looks populated (tables exist)",
+        help="Import SQL even if marker/hash indicates already imported",
+    )
+    parser.add_argument(
+        "--no-import",
+        action="store_true",
+        help="Skip SQL import step entirely (useful if Docker init scripts manage loading)",
     )
     parser.add_argument(
         "--no-schema-dump",
@@ -341,6 +436,11 @@ def main() -> int:
         "--no-data-dump",
         action="store_true",
         help="Skip data-only snapshot extraction (DML)",
+    )
+    parser.add_argument(
+        "--force-dump",
+        action="store_true",
+        help="Overwrite existing DDL/DML snapshot files",
     )
     args = parser.parse_args()
 
@@ -355,6 +455,8 @@ def main() -> int:
     print(f"Reset DBs: {args.reset_db}")
     print(f"Force download: {args.force_download}")
     print(f"Force import: {args.force_import}")
+    print(f"No import: {args.no_import}")
+    print(f"Force dump: {args.force_dump}")
     print("")
 
     for db_type in targets:
@@ -371,30 +473,55 @@ def main() -> int:
 
             ensure_db(db_type, creds, dataset, reset=args.reset_db)
 
-            # Decide whether to import
-            min_tables = EXPECTED_TABLES.get(dataset, 1)
-
-            already = False
-            if not args.reset_db:
-                already = is_already_imported(db_type, creds, dataset, min_tables=min_tables)
-
-            if already and not args.force_import:
-                tc = table_count(db_type, creds, dataset)
-                print(f"⏭️  Skipping import: {db_type}:{dataset} already populated (tables={tc} >= {min_tables}).")
+            if args.no_import:
+                print("⏭️  Skipping import (--no-import).")
             else:
-                print(f"📥 Importing {sql_path.name} into {db_type}:{dataset} ...")
-                try:
-                    docker_mysql_import_file(db_type, creds, dataset, sql_path)
-                    print(f"✅ Import complete: {db_type}:{dataset}")
-                except subprocess.CalledProcessError:
-                    print(f"❌ Import failed for {db_type}:{dataset}.")
-                    print("Tip: check container logs and SQL syntax compatibility.")
-                    return 1
+                # Decide whether to import using marker/hash (FAST)
+                file_hash = sql_file_sha256(sql_path)
+
+                already = False
+                stored_hash = None
+
+                if not args.reset_db:
+                    stored_hash = get_import_hash(db_type, creds, dataset)
+                    if stored_hash and stored_hash == file_hash:
+                        already = True
+
+                if already and not args.force_import:
+                    print(f"⏭️  Skipping import: {db_type}:{dataset} already imported (hash match).")
+                else:
+                    # If marker missing, optionally fall back to old heuristic to avoid unnecessary imports
+                    if (not stored_hash) and (not args.reset_db) and (not args.force_import):
+                        min_tables = EXPECTED_TABLES.get(dataset, 1)
+                        if is_already_imported_fallback(db_type, creds, dataset, min_tables=min_tables):
+                            print(f"⏭️  Skipping import (fallback): {db_type}:{dataset} looks populated (tables >= {min_tables}).")
+                            # Set marker now to make future runs fast
+                            set_import_hash(db_type, creds, dataset, file_hash)
+                        else:
+                            print(f"📥 Importing {sql_path.name} into {db_type}:{dataset} ...")
+                            try:
+                                docker_mysql_import_file(db_type, creds, dataset, sql_path)
+                                set_import_hash(db_type, creds, dataset, file_hash)
+                                print(f"✅ Import complete: {db_type}:{dataset}")
+                            except subprocess.CalledProcessError:
+                                print(f"❌ Import failed for {db_type}:{dataset}.")
+                                print("Tip: check container logs and SQL syntax compatibility.")
+                                return 1
+                    else:
+                        print(f"📥 Importing {sql_path.name} into {db_type}:{dataset} ...")
+                        try:
+                            docker_mysql_import_file(db_type, creds, dataset, sql_path)
+                            set_import_hash(db_type, creds, dataset, file_hash)
+                            print(f"✅ Import complete: {db_type}:{dataset}")
+                        except subprocess.CalledProcessError:
+                            print(f"❌ Import failed for {db_type}:{dataset}.")
+                            print("Tip: check container logs and SQL syntax compatibility.")
+                            return 1
 
             if not args.no_schema_dump:
-                extract_schema_snapshot(db_type, creds, dataset)
+                extract_schema_snapshot(db_type, creds, dataset, force=args.force_dump)
             if not args.no_data_dump:
-                extract_data_snapshot(db_type, creds, dataset)
+                extract_data_snapshot(db_type, creds, dataset, force=args.force_dump)
 
     print("\n✅ Done.")
     return 0

@@ -86,6 +86,33 @@ def get_engine(db_type: str, database: str | None = None, echo: bool = False):
     else:
         raise ValueError(f"Unsupported db_type: {db_type!r}. Use 'mysql' or 'mariadb'.")
 
-    # pool_pre_ping=True helps avoid stale connections
-    engine = create_engine(url, pool_pre_ping=True, echo=echo, future=True)
+    connect_args = {}
+
+    # --- client-side timeouts (best effort; depends on driver) ---
+    # mysql-connector-python
+    if "mysqlconnector" in str(url):
+        connect_args.update({
+            "connection_timeout": 120,   # connect timeout
+            "read_timeout": 130,         # socket read
+            "write_timeout": 130,        # socket write
+        })
+
+    # PyMySQL
+    if "pymysql" in str(url):
+        connect_args.update({
+            "connect_timeout": 120,
+            "read_timeout": 130,
+            "write_timeout": 130,
+        })
+
+    # mariadb connector / mysqlclient may differ; some use "connect_timeout" only.
+    # (still helpful)
+
+    engine = create_engine(
+        url,
+        pool_pre_ping=True,
+        echo=echo,
+        future=True,
+        connect_args=connect_args if connect_args else None,
+    )
     return engine
