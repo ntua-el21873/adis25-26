@@ -138,6 +138,50 @@ def read_last_row_id(jsonl_path: Path) -> int:
                 pass
     return last_id
 
+
+
+def derive_out_path(args_out: str, dataset_name: str, rdbms: str) -> Path:
+    """
+    If args_out is empty -> default_out_path(dataset_name, rdbms)
+
+    If args_out is provided:
+      - if endswith .jsonl -> insert _<rdbms> before suffix
+        (e.g. foo.jsonl -> foo_mysql.jsonl / foo_mariadb.jsonl)
+      - else -> treat as a prefix and append _<rdbms>.jsonl
+        (e.g. foo -> foo_mysql.jsonl)
+    """
+    if not args_out or not args_out.strip():
+        return default_out_path(dataset_name, rdbms)
+
+    p = Path(args_out)
+    if p.suffix.lower() == ".jsonl":
+        return p.with_name(f"{p.stem}_{rdbms}{p.suffix}")
+    return Path(f"{args_out}_{rdbms}.jsonl")
+
+
+def print_header(
+    dataset_path: Path,
+    dataset_name: str,
+    llm_name: str,
+    rdbms: str,
+    out_paths: List[Tuple[str, Path]],
+    args,
+) -> None:
+    print("🧪 GPT-2 XL Text2SQL Benchmark Runner")
+    print("=" * 80)
+    print(f"Dataset file: {dataset_path}")
+    print(f"Dataset name (DB): {dataset_name}")
+    print(f"LLM: {llm_name}")
+    print(f"RDBMS: {rdbms}")
+    for label, p in out_paths:
+        print(f"{label}: {p}")
+    print(f"Question limit: {args.limit if args.limit > 0 else 'ALL'}")
+    print(f"Schema max tables: {args.max_tables}")
+    print(f"Max new tokens: {args.max_new_tokens}")
+    print(f"Entry start index: {args.entry_idx}")
+    print("=" * 80)
+
+
 # ----------------------------
 # SQL difficulty scoring
 # ----------------------------
@@ -200,6 +244,7 @@ def get_difficulty(entry: dict, sentence: dict) -> int:
 # Variable substitution for question_text_filled (best-effort)
 # ----------------------------
 
+
 def build_identifier_maps(db: DatabaseManager, dataset_name: str):
     """
     Input: DatabaseManager + dataset name
@@ -247,6 +292,7 @@ def fill_question_text(question_text: str, variables: Dict[str, Any]) -> str:
 # ----------------------------
 # Schema/prompt instrumentation
 # ----------------------------
+
 
 def count_prompt_tokens_effective(
     agent: GPT2XLAgent, schema_compact: str, question: str, max_new_tokens: int
@@ -346,13 +392,14 @@ def pred_vs_gold_match(pred_res: Optional[dict], gold_res: Optional[dict]) -> bo
 # Output naming
 # ----------------------------
 
+
 def default_out_path(dataset_name: str, rdbms: str) -> Path:
     return Path("results") / f"gpt2xl_benchmark_{dataset_name}_{rdbms}.jsonl"
+
 
 # ----------------------------
 # Main
 # ----------------------------
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -362,8 +409,8 @@ def main() -> int:
         "--rdbms",
         type=str,
         required=True,
-        choices=["mysql", "mariadb"],
-        help="One RDBMS per run.",
+        choices=["mysql", "mariadb", "both"],
+        help="One RDBMS per run (or both).",
     )
     parser.add_argument(
         "--limit",
@@ -381,13 +428,13 @@ def main() -> int:
         help="Max tokens to generate for SQL.",
     )
     parser.add_argument(
-        "--out", type=str, default="", help="Optional output JSONL path."
+        "--out", type=str, default="", help="Optional output JSONL path (or prefix)."
     )
     parser.add_argument(
         "--entry_idx",
         type=int,
         default=0,
-        help="Start from this entry index in the dataset list (default: 0).",
+        help="Start from this entry index in the dataset list.",
     )
     args = parser.parse_args()
 
@@ -397,49 +444,211 @@ def main() -> int:
         return 1
 
     dataset_name = dataset_path.stem
-    rdbms = args.rdbms
     llm_name = "gpt2xl"
-
-    out_path = (
-        Path(args.out) if args.out.strip() else default_out_path(dataset_name, rdbms)
-    )
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    print("🧪 GPT-2 XL Text2SQL Benchmark Runner")
-    print("=" * 80)
-    print(f"Dataset file: {dataset_path}")
-    print(f"Dataset name (DB): {dataset_name}")
-    print(f"LLM: {llm_name}")
-    print(f"RDBMS: {rdbms}")
-    print(f"Output: {out_path}")
-    print(f"Question limit: {args.limit if args.limit > 0 else 'ALL'}")
-    print(f"Schema max tables: {args.max_tables}")
-    print(f"Max new tokens: {args.max_new_tokens}")
-    print("=" * 80)
-
-    last_id = read_last_row_id(out_path)
-    resume_from = 0
-    if last_id >= 0:
-        resume_from = last_id + 1
+    both_mode = args.rdbms == "both"
 
     data = load_dataset(dataset_path)
 
     # Initialize model once
     agent = GPT2XLAgent()
 
-    # Use the selected RDBMS for schema introspection + execution
-    db = DatabaseManager(rdbms)
-    db.switch_database(dataset_name)
-    schema_tables = db.get_table_names(database=dataset_name)
+    # -------------------------
+    # SINGLE RDBMS MODE
+    # -------------------------
+    if not both_mode:
+        rdbms = args.rdbms
+        out_path = derive_out_path(args.out, dataset_name, rdbms)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    table_map = build_identifier_maps(db, dataset_name)
-    schema_map = db.get_schema_map()
+        print_header(
+            dataset_path, dataset_name, llm_name, rdbms, [("Output", out_path)], args
+        )
+
+        last_id = read_last_row_id(out_path)
+        resume_from = (last_id + 1) if last_id >= 0 else 0
+
+        db = DatabaseManager(rdbms)
+        db.switch_database(dataset_name)
+
+        schema_tables = db.get_table_names(database=dataset_name)
+        table_map = build_identifier_maps(db, dataset_name)
+        schema_map = db.get_schema_map()
+
+        row_id = 0
+        questions_processed = 0
+        skipped = 0
+
+        mode = "a" if out_path.exists() and out_path.stat().st_size > 0 else "w"
+        with out_path.open(mode, encoding="utf-8") as f:
+            for entry in data[args.entry_idx :]:
+                query_split = get_query_split(entry)
+                sql_variants = get_sql_variants(entry)
+                gold_sql_first = sql_variants[0] if sql_variants else ""
+
+                for sentence in iter_sentences(entry):
+                    if args.limit > 0 and questions_processed >= args.limit:
+                        break
+
+                    if row_id < resume_from:
+                        row_id += 1
+                        continue
+
+                    question_text = get_sentence_text(sentence)
+                    question_vars = get_sentence_variables(sentence)
+                    question_text_filled = fill_question_text(
+                        question_text, question_vars
+                    )
+
+                    question_split = get_question_split(sentence)
+                    difficulty = get_difficulty(entry, sentence)
+
+                    schema_compact = db.get_compact_schema(
+                        database=dataset_name,
+                        question=question_text_filled,
+                        max_tables=args.max_tables,
+                    )
+                    schema_num_tables, schema_num_columns = parse_schema_counts(
+                        schema_compact
+                    )
+
+                    prompt_tokens = count_prompt_tokens_effective(
+                        agent,
+                        schema_compact,
+                        question_text_filled,
+                        max_new_tokens=args.max_new_tokens,
+                    )
+
+                    gold_sql_exec = fill_gold_sql(entry, sentence)
+                    gold_sql_exec = normalize_table_case(gold_sql_exec, table_map)
+
+                    t0 = time.time()
+                    try:
+                        pred_sql_raw = agent.generate_sql(
+                            schema=schema_compact,
+                            question=question_text_filled,
+                            max_new_tokens=args.max_new_tokens,
+                            max_time=240.0,
+                        )
+                    except RuntimeError:
+                        skipped += 1
+                        print(
+                            f"[SKIP {row_id}] RuntimeError during generation (skipped so far: {skipped})"
+                        )
+                        row_id += 1
+                        continue
+                    gen_time_s = time.time() - t0
+
+                    pred_sql = normalize_pred_sql(pred_sql_raw, schema_tables)
+                    pred_sql = normalize_table_case(pred_sql, table_map)
+                    pred_sql, pred_repairs = repair_pred_table_names(
+                        pred_sql, schema_tables
+                    )
+                    pred_sql, pred_col_repairs = repair_pred_column_names(
+                        pred_sql, schema_map
+                    )
+
+                    db.switch_database(dataset_name)
+                    pred_res = db.execute_query(pred_sql)
+                    gold_res = db.execute_query(gold_sql_exec)
+
+                    match = pred_vs_gold_match(pred_res, gold_res)
+
+                    record: Dict[str, Any] = {
+                        "id": row_id,
+                        "dataset": dataset_name,
+                        "llm": llm_name,
+                        "rdbms": rdbms,
+                        "question_text": question_text,
+                        "question_text_filled": question_text_filled,
+                        "question_variables": question_vars,
+                        "query_split": query_split,
+                        "question_split": question_split,
+                        "difficulty": difficulty,
+                        "gold_sql_first": gold_sql_first,
+                        "gold_sql_exec": gold_sql_exec,
+                        "schema_compact": schema_compact,
+                        "schema_num_tables": schema_num_tables,
+                        "schema_num_columns": schema_num_columns,
+                        "prompt_tokens": prompt_tokens,
+                        "pred_sql_raw": pred_sql_raw,
+                        "pred_sql": pred_sql,
+                        "pred_repairs": pred_repairs,
+                        "pred_col_repairs": pred_col_repairs,
+                        "gen_time_s": round(gen_time_s, 6),
+                    }
+
+                    record.update(pack_exec_fields(f"{rdbms}_pred", pred_res))
+                    record.update(pack_exec_fields(f"{rdbms}_gold", gold_res))
+                    record[f"{rdbms}_pred_vs_gold_match"] = bool(match)
+
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+                    pred_ok = "OK" if pred_res and pred_res.get("success") else "FAIL"
+                    gold_ok = "OK" if gold_res and gold_res.get("success") else "FAIL"
+                    acc = "✔" if match else "✘"
+                    print(
+                        f"[{row_id}] qsplit={query_split or '-'} ssplit={question_split or '-'} "
+                        f"pred={pred_ok} gold={gold_ok} ex={acc} "
+                        f"tables={schema_num_tables} prompt_tokens={prompt_tokens}"
+                    )
+
+                    row_id += 1
+                    questions_processed += 1
+
+                if args.limit > 0 and questions_processed >= args.limit:
+                    break
+
+        db.close()
+
+        print("\n" + "=" * 80)
+        print("✅ Done")
+        print("=" * 80)
+        print(f"Questions processed: {questions_processed}")
+        print(f"Wrote JSONL: {out_path}")
+        return 0
+
+    # -------------------------
+    # BOTH MODE (mysql + mariadb)
+    # -------------------------
+    mysql_out = derive_out_path(args.out, dataset_name, "mysql")
+    mariadb_out = derive_out_path(args.out, dataset_name, "mariadb")
+    mysql_out.parent.mkdir(parents=True, exist_ok=True)
+    mariadb_out.parent.mkdir(parents=True, exist_ok=True)
+
+    print_header(
+        dataset_path,
+        dataset_name,
+        llm_name,
+        "both",
+        [("MySQL output", mysql_out), ("MariaDB output", mariadb_out)],
+        args,
+    )
+
+    mysql_resume_from = read_last_row_id(mysql_out) + 1
+    mariadb_resume_from = read_last_row_id(mariadb_out) + 1
+
+    db_mysql = DatabaseManager("mysql")
+    db_mariadb = DatabaseManager("mariadb")
+    db_mysql.switch_database(dataset_name)
+    db_mariadb.switch_database(dataset_name)
+
+    # For determinism/fairness, derive schema + maps from ONE engine (mysql), reuse for both
+    schema_tables = db_mysql.get_table_names(database=dataset_name)
+    table_map = build_identifier_maps(db_mysql, dataset_name)
+    schema_map = db_mysql.get_schema_map()
+
+    mysql_mode = "a" if mysql_out.exists() and mysql_out.stat().st_size > 0 else "w"
+    mariadb_mode = (
+        "a" if mariadb_out.exists() and mariadb_out.stat().st_size > 0 else "w"
+    )
+
     row_id = 0
     questions_processed = 0
     skipped = 0
 
-    mode = "a" if out_path.exists() and out_path.stat().st_size > 0 else "w"
-    with out_path.open(mode, encoding="utf-8") as f:
+    with mysql_out.open(mysql_mode, encoding="utf-8") as f_mysql, mariadb_out.open(
+        mariadb_mode, encoding="utf-8"
+    ) as f_mariadb:
 
         for entry in data[args.entry_idx :]:
             query_split = get_query_split(entry)
@@ -449,8 +658,12 @@ def main() -> int:
             for sentence in iter_sentences(entry):
                 if args.limit > 0 and questions_processed >= args.limit:
                     break
-                
-                if row_id < resume_from:
+
+                mysql_needs = row_id >= mysql_resume_from
+                mariadb_needs = row_id >= mariadb_resume_from
+
+                # If both files already have this id, skip (like two resumed runs)
+                if not mysql_needs and not mariadb_needs:
                     row_id += 1
                     continue
 
@@ -461,8 +674,8 @@ def main() -> int:
                 question_split = get_question_split(sentence)
                 difficulty = get_difficulty(entry, sentence)
 
-                # Compact schema for prompt
-                schema_compact = db.get_compact_schema(
+                # Build compact schema once (use mysql for determinism)
+                schema_compact = db_mysql.get_compact_schema(
                     database=dataset_name,
                     question=question_text_filled,
                     max_tables=args.max_tables,
@@ -471,7 +684,6 @@ def main() -> int:
                     schema_compact
                 )
 
-                # Exact prompt tokens as actually fed into GPT-2 (includes truncation)
                 prompt_tokens = count_prompt_tokens_effective(
                     agent,
                     schema_compact,
@@ -479,66 +691,64 @@ def main() -> int:
                     max_new_tokens=args.max_new_tokens,
                 )
 
-                # Gold SQL executable (filled)
                 gold_sql_exec = fill_gold_sql(entry, sentence)
                 gold_sql_exec = normalize_table_case(gold_sql_exec, table_map)
 
-                # Generate SQL (time only generation)
+                # Generate ONCE, use for both
                 t0 = time.time()
                 try:
                     pred_sql_raw = agent.generate_sql(
                         schema=schema_compact,
                         question=question_text_filled,
                         max_new_tokens=args.max_new_tokens,
-                        max_time=240.0,  # 4 min per query timeout
+                        max_time=240.0,
                     )
-                except RuntimeError as e:
+                except RuntimeError:
                     skipped += 1
                     print(
-                        f"[SKIP] RuntimeError during generation "
-                        f"(skipped so far: {skipped})"
+                        f"[SKIP {row_id}] RuntimeError during generation (skipped so far: {skipped})"
                     )
-                    continue  # move to next question
+                    row_id += 1
+                    continue
                 gen_time_s = time.time() - t0
 
-                # Normalize prediction (table casing etc.)
                 pred_sql = normalize_pred_sql(pred_sql_raw, schema_tables)
                 pred_sql = normalize_table_case(pred_sql, table_map)
                 pred_sql, pred_repairs = repair_pred_table_names(
                     pred_sql, schema_tables
                 )
                 pred_sql, pred_col_repairs = repair_pred_column_names(
-                    pred_sql, schema_map)
+                    pred_sql, schema_map
+                )
 
-                # Execute predicted + gold
-                db.switch_database(dataset_name)
-                pred_res = db.execute_query(pred_sql)
-                gold_res = db.execute_query(gold_sql_exec)
+                # Execute on both
+                db_mysql.switch_database(dataset_name)
+                db_mariadb.switch_database(dataset_name)
 
-                match = pred_vs_gold_match(pred_res, gold_res)
+                pred_res_mysql = db_mysql.execute_query(pred_sql)
+                gold_res_mysql = db_mysql.execute_query(gold_sql_exec)
+                match_mysql = pred_vs_gold_match(pred_res_mysql, gold_res_mysql)
 
-                record: Dict[str, Any] = {
-                    # Core identifiers
+                pred_res_mariadb = db_mariadb.execute_query(pred_sql)
+                gold_res_mariadb = db_mariadb.execute_query(gold_sql_exec)
+                match_mariadb = pred_vs_gold_match(pred_res_mariadb, gold_res_mariadb)
+
+                base_record: Dict[str, Any] = {
                     "id": row_id,
                     "dataset": dataset_name,
                     "llm": llm_name,
-                    "rdbms": rdbms,
-                    # Question & dataset metadata
                     "question_text": question_text,
                     "question_text_filled": question_text_filled,
                     "question_variables": question_vars,
                     "query_split": query_split,
                     "question_split": question_split,
                     "difficulty": difficulty,
-                    # Gold SQL
                     "gold_sql_first": gold_sql_first,
                     "gold_sql_exec": gold_sql_exec,
-                    # Schema/prompt information
                     "schema_compact": schema_compact,
                     "schema_num_tables": schema_num_tables,
                     "schema_num_columns": schema_num_columns,
                     "prompt_tokens": prompt_tokens,
-                    # LLM output
                     "pred_sql_raw": pred_sql_raw,
                     "pred_sql": pred_sql,
                     "pred_repairs": pred_repairs,
@@ -546,22 +756,50 @@ def main() -> int:
                     "gen_time_s": round(gen_time_s, 6),
                 }
 
-                # Execution results (namespaced)
-                record.update(pack_exec_fields(f"{rdbms}_pred", pred_res))
-                record.update(pack_exec_fields(f"{rdbms}_gold", gold_res))
+                if mysql_needs:
+                    rec_mysql = dict(base_record)
+                    rec_mysql["rdbms"] = "mysql"
+                    rec_mysql.update(pack_exec_fields("mysql_pred", pred_res_mysql))
+                    rec_mysql.update(pack_exec_fields("mysql_gold", gold_res_mysql))
+                    rec_mysql["mysql_pred_vs_gold_match"] = bool(match_mysql)
+                    f_mysql.write(json.dumps(rec_mysql, ensure_ascii=False) + "\n")
 
-                # Execution comparison
-                record[f"{rdbms}_pred_vs_gold_match"] = bool(match)
+                if mariadb_needs:
+                    rec_mariadb = dict(base_record)
+                    rec_mariadb["rdbms"] = "mariadb"
+                    rec_mariadb.update(
+                        pack_exec_fields("mariadb_pred", pred_res_mariadb)
+                    )
+                    rec_mariadb.update(
+                        pack_exec_fields("mariadb_gold", gold_res_mariadb)
+                    )
+                    rec_mariadb["mariadb_pred_vs_gold_match"] = bool(match_mariadb)
+                    f_mariadb.write(json.dumps(rec_mariadb, ensure_ascii=False) + "\n")
 
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                pm = (
+                    "OK" if pred_res_mysql and pred_res_mysql.get("success") else "FAIL"
+                )
+                gm = (
+                    "OK" if gold_res_mysql and gold_res_mysql.get("success") else "FAIL"
+                )
+                am = "✔" if match_mysql else "✘"
 
-                # Console line
-                pred_ok = "OK" if pred_res and pred_res.get("success") else "FAIL"
-                gold_ok = "OK" if gold_res and gold_res.get("success") else "FAIL"
-                acc = "✔" if match else "✘"
+                pmd = (
+                    "OK"
+                    if pred_res_mariadb and pred_res_mariadb.get("success")
+                    else "FAIL"
+                )
+                gmd = (
+                    "OK"
+                    if gold_res_mariadb and gold_res_mariadb.get("success")
+                    else "FAIL"
+                )
+                amd = "✔" if match_mariadb else "✘"
+
                 print(
                     f"[{row_id}] qsplit={query_split or '-'} ssplit={question_split or '-'} "
-                    f"pred={pred_ok} gold={gold_ok} ex={acc} "
+                    f"mysql: pred={pm} gold={gm} ex={am} | "
+                    f"mariadb: pred={pmd} gold={gmd} ex={amd} "
                     f"tables={schema_num_tables} prompt_tokens={prompt_tokens}"
                 )
 
@@ -571,13 +809,15 @@ def main() -> int:
             if args.limit > 0 and questions_processed >= args.limit:
                 break
 
-    db.close()
+    db_mysql.close()
+    db_mariadb.close()
 
     print("\n" + "=" * 80)
-    print("✅ Done")
+    print("✅ Done (both)")
     print("=" * 80)
     print(f"Questions processed: {questions_processed}")
-    print(f"Wrote JSONL: {out_path}")
+    print(f"Wrote JSONL (mysql):   {mysql_out}")
+    print(f"Wrote JSONL (mariadb): {mariadb_out}")
 
     return 0
 
