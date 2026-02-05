@@ -92,17 +92,17 @@ def get_engine(db_type: str, database: str | None = None, echo: bool = False):
     # mysql-connector-python
     if "mysqlconnector" in str(url):
         connect_args.update({
-            "connection_timeout": 10,   # connect timeout
-            "read_timeout": 30,         # socket read
-            "write_timeout": 30,        # socket write
+            "connection_timeout": 120,   # connect timeout
+            "read_timeout": 130,         # socket read
+            "write_timeout": 130,        # socket write
         })
 
     # PyMySQL
     if "pymysql" in str(url):
         connect_args.update({
-            "connect_timeout": 10,
-            "read_timeout": 30,
-            "write_timeout": 30,
+            "connect_timeout": 120,
+            "read_timeout": 130,
+            "write_timeout": 130,
         })
 
     # mariadb connector / mysqlclient may differ; some use "connect_timeout" only.

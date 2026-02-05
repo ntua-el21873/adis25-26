@@ -55,10 +55,10 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 if self.db_type == "mysql":
                     # milliseconds
-                    conn.execute(text("SET GLOBAL max_execution_time = :ms"), {"ms": 20000})
+                    conn.execute(text("SET GLOBAL max_execution_time = :ms"), {"ms": 130000})
                 elif self.db_type == "mariadb":
                     # seconds
-                    conn.execute(text("SET GLOBAL max_statement_time = :sec"), {"sec": 20})
+                    conn.execute(text("SET GLOBAL max_statement_time = :sec"), {"sec": 130})
                 else:
                     return
 
