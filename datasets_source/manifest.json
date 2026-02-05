@@ -1,12 +1,12 @@
 {
-  "generated_at_epoch": 1769700697,
+  "generated_at_epoch": 1770285293,
   "datasets": [
     {
       "name": "advising",
       "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/advising.json",
       "description": "205 queries, 15 tables",
       "file": "datasets_source/data/advising.json",
-      "mode": "downloaded",
+      "mode": "cached",
       "total": 205,
       "keys": [
         "query-split",
@@ -20,7 +20,7 @@
       "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/atis.json",
       "description": "947 queries, 25 tables",
       "file": "datasets_source/data/atis.json",
-      "mode": "downloaded",
+      "mode": "cached",
       "total": 947,
       "keys": [
         "comments",
@@ -36,7 +36,7 @@
       "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/imdb.json",
       "description": "89 queries, 16 tables",
       "file": "datasets_source/data/imdb.json",
-      "mode": "downloaded",
+      "mode": "cached",
       "total": 89,
       "keys": [
         "difficulty",
@@ -51,7 +51,7 @@
       "url": "https://raw.githubusercontent.com/jkkummerfeld/text2sql-data/master/data/yelp.json",
       "description": "110 queries, 7 tables",
       "file": "datasets_source/data/yelp.json",
-      "mode": "downloaded",
+      "mode": "cached",
       "total": 110,
       "keys": [
         "difficulty",
