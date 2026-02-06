@@ -1,6 +1,22 @@
-# Local LLM Text-to-SQL Benchmark (MySQL & MariaDB) — GPT-2 XL vs Qwen2.5-Coder
+<div align="center">
 
-This repository contains an end-to-end, fully local Text-to-SQL benchmarking framework that evaluates open-source LLMs by **execution accuracy** (semantic correctness) rather than string matching. The system integrates local LLM agents with **Dockerized MySQL 8.0** and **MariaDB 11.2**, runs queries across multiple datasets, and logs detailed results for reproducible analysis.
+# Local LLM Text-to-SQL Benchmark  
+### GPT-2 XL vs Qwen2.5-Coder · MySQL & MariaDB
+
+![Python](https://img.shields.io/badge/Python-3.12-blue.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.5+-ee4c2c.svg)
+![Transformers](https://img.shields.io/badge/🤗%20Transformers-4.45+-yellow.svg)
+![Docker](https://img.shields.io/badge/Docker-MySQL%20%7C%20MariaDB-2496ED.svg)
+![License](https://img.shields.io/badge/License-Academic-lightgrey.svg)
+
+**Execution-based benchmarking of fully local LLM Text-to-SQL systems**  
+*No APIs · No cloud · Reproducible · Dialect-aware*
+
+</div>
+
+This repository contains an **end-to-end, fully local Text-to-SQL benchmarking framework** that evaluates open-source Large Language Models (LLMs) by **execution accuracy** (semantic correctness) rather than string matching.  
+
+The system integrates local LLM agents with **Dockerized MySQL 8.0** and **MariaDB 11.2**, executes generated queries across multiple real-world datasets, and logs detailed, execution-level results for reproducible analysis.
 
 ## Key Features
 
@@ -65,7 +81,7 @@ The easiest way to set up everything is:
 1. Open PowerShell in the repository root
 2. Run:
 ```powershell
-   .\setup.ps1
+.\setup.ps1
 ````
 
 This script:
@@ -85,18 +101,18 @@ This script:
 ### Qwen baseline
 
 ```bash
-python scripts/run_qwen_baseline.py --dataset datasets_source/data/atis.json --backend mysql --max_tables 12
+python scripts/run_qwen_baseline.py --dataset datasets_source/data/{dataset}.json --rdbms {rdbms} --max_tables {your_choice}
 ```
 
 ### GPT-2 XL baseline
 
 ```bash
-python scripts/run_gpt2xl_baseline.py --dataset datasets_source/data/atis.json --backend mysql --max_tables 12
+python scripts/run_gpt2xl_baseline.py --dataset datasets_source/data/{dataset}.json --rdbms {rdbms} --max_tables {your_choice}
 ```
 
 Notes:
 
-* `--backend` typically accepts `mysql` or `mariadb`
+* `--backend` typically accepts `mysql` or `mariadb` (or both)
 * `--max_tables` activates schema compaction (deterministic relevance ranking)
 * Outputs are written under `results/` as **JSONL** (one record per question)
 
@@ -107,13 +123,13 @@ Notes:
 ### Qwen agent smoke test
 
 ```bash
-python scripts/llm/qwen_smoketest.py
+python scripts/llm/qwen_smoketest.py --dataset datasets_source/data/{dataset}.json --rdbms {rdbms} --max_tables {your_choice}
 ```
 
 ### End-to-end Text-to-SQL smoke test
 
 ```bash
-python scripts/llm/llm_smoketest_text2sql.py
+python scripts/llm/llm_smoketest_text2sql.py --dataset datasets_source/data/{dataset}.json --rdbms {rdbms} --max_tables {your_choice}
 ```
 
 ### Single-query debug runners
