@@ -148,15 +148,6 @@ def build_rows_from_file(jsonl_path: Path) -> List[Dict[str, Any]]:
             pred_exec_time = _get_exec_field(rec, pred_prefix, "execution_time_s")
             gold_exec_time = _get_exec_field(rec, gold_prefix, "execution_time_s")
 
-            pred_rows = _get_exec_field(rec, pred_prefix, "rows")
-            gold_rows = _get_exec_field(rec, gold_prefix, "rows")
-
-            # Some scripts used mysql_pred_rows directly (already covered by alt map)
-            # but keep one more fallback just in case:
-            if pred_rows is None:
-                pred_rows = rec.get(f"{pred_prefix}_rows")
-            if gold_rows is None:
-                gold_rows = rec.get(f"{gold_prefix}_rows")
 
             # Match field
             match = rec.get(f"{rdbms}_pred_vs_gold_match")
@@ -199,8 +190,6 @@ def build_rows_from_file(jsonl_path: Path) -> List[Dict[str, Any]]:
                 # Execution timing & sizes
                 "pred_execution_time_s": _safe_float(pred_exec_time),
                 "gold_execution_time_s": _safe_float(gold_exec_time),
-                "pred_rows": _safe_int(pred_rows),
-                "gold_rows": _safe_int(gold_rows),
 
                 # Repairs
                 "num_table_repairs": _safe_int(num_table_repairs),
@@ -236,7 +225,6 @@ def main() -> None:
         "gen_time_s",
         "pred_success", "gold_success", "pred_vs_gold_match",
         "pred_execution_time_s", "gold_execution_time_s",
-        "pred_rows", "gold_rows",
         "num_table_repairs", "num_column_repairs",
         "has_repairs", "valid_prediction", "successful_execution",
     ]
