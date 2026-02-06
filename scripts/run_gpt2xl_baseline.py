@@ -139,7 +139,6 @@ def read_last_row_id(jsonl_path: Path) -> int:
     return last_id
 
 
-
 def derive_out_path(args_out: str, dataset_name: str, rdbms: str) -> Path:
     """
     If args_out is empty -> default_out_path(dataset_name, rdbms)

@@ -185,21 +185,6 @@ class DatabaseManager:
 
         return "\n".join(schema_lines)
 
-    def get_schema_for_dataset(self, dataset_name):
-        """
-        Get schema for specific text2sql dataset
-
-        Args:
-            dataset_name: 'academic', 'imdb', 'yelp', etc.
-
-        Returns:
-            str: Schema string
-        """
-        db_name = self.DATASET_DATABASES.get(dataset_name)
-        if not db_name:
-            raise ValueError(f"Unknown dataset: {dataset_name}")
-
-        return self.get_schema(db_name)
 
     def get_compact_schema(
         self,
