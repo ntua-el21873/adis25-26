@@ -326,7 +326,7 @@ def main():
 
         # Processing Loop
         mode = "a" if out_path.exists() and out_path.stat().st_size > 0 else "w"
-        mariadb_out_path = out_path.parent / f"results/qwen_{dataset_name}_mariadb.jsonl"
+        mariadb_out_path = out_path.parent / f"qwen_{dataset_name}_mariadb.jsonl"
         with out_path.open(mode, encoding="utf-8") as f, mariadb_out_path.open("w", encoding="utf-8") as f_mariadb:
             for entry in data:
                 # Metadata
@@ -463,7 +463,7 @@ def main():
                         f"tables={schema_num_tables} prompt_tokens={prompt_tokens}"
                     )
 
-                    row_id += 1
+                    row_id += 10
                     questions_processed += 1
 
                 if args.limit > 0 and questions_processed >= args.limit:

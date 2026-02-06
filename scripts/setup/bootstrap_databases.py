@@ -78,7 +78,7 @@ DATASET_SQL_SOURCES: Dict[str, Dict] = {
     },
 }
 
-DEFAULT_DATASETS = ["advising", "atis", "imdb", "yelp"]
+DEFAULT_DATASETS = ["advising", "atis"]
 
 # Expected table counts
 EXPECTED_TABLES = {
