@@ -17,9 +17,6 @@ services:
       
       # Initialization scripts - will run in alphabetical order
       - ./data/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./data/mysql/academic.sql:/docker-entrypoint-initdb.d/02-academic.sql
-      - ./data/mysql/imdb.sql:/docker-entrypoint-initdb.d/03-imdb.sql
-      - ./data/mysql/yelp.sql:/docker-entrypoint-initdb.d/04-yelp.sql
       
     command: 
       - --default-authentication-plugin=mysql_native_password
@@ -53,9 +50,6 @@ services:
       
       # Same initialization scripts as MySQL for consistency
       - ./data/mariadb/init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./data/mariadb/academic.sql:/docker-entrypoint-initdb.d/02-academic.sql
-      - ./data/mariadb/imdb.sql:/docker-entrypoint-initdb.d/03-imdb.sql
-      - ./data/mariadb/yelp.sql:/docker-entrypoint-initdb.d/04-yelp.sql
       
     command:
       - --character-set-server=utf8mb4
