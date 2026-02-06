@@ -170,7 +170,7 @@ def read_last_row_id(jsonl_path: Path) -> int:
 
 def derive_out_paths(args_out: str, dataset_name: str, rdbms: str) -> Path:
     """
-    If args_out is empty -> results/qwen_baseline_<dataset>_<rdbms>.jsonl
+    If args_out is empty -> results/qwen_benchmark_<dataset>_<rdbms>.jsonl
 
     If args_out is provided:
       - if endswith .jsonl -> insert _<rdbms> before suffix
@@ -179,7 +179,7 @@ def derive_out_paths(args_out: str, dataset_name: str, rdbms: str) -> Path:
         (e.g. foo -> foo_mysql.jsonl)
     """
     if not args_out:
-        return Path("results") / f"qwen_baseline_{dataset_name}_{rdbms}.jsonl"
+        return Path("results") / f"qwen_benchmark_{dataset_name}_{rdbms}.jsonl"
 
     p = Path(args_out)
     if p.suffix.lower() == ".jsonl":
