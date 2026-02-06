@@ -1,0 +1,17 @@
+model,dataset,rdbms,n_queries,avg_num_table_repairs,avg_num_column_repairs,pct_queries_with_any_repair,prediction_success_rate_overall_pct,prediction_success_rate_with_repairs_pct,prediction_success_rate_without_repairs_pct,n_with_repairs,n_without_repairs
+qwen,advising,mariadb,2079,0.0,0.0,0.0,1.11,,1.11,0,2079
+gpt2xl,advising,mariadb,825,0.006,0.001,0.73,0.0,0.0,0.0,6,819
+qwen,advising,mysql,1058,0.0,0.346,19.09,38.75,33.17,40.07,202,856
+gpt2xl,advising,mysql,825,0.006,0.001,0.73,0.0,0.0,0.0,6,819
+qwen,atis,mariadb,1112,0.0,0.35,34.98,25.27,2.83,37.34,389,723
+gpt2xl,atis,mariadb,422,0.012,0.0,1.18,0.0,0.0,0.0,5,417
+qwen,atis,mysql,1550,0.0,0.266,26.65,29.03,3.87,38.17,413,1137
+gpt2xl,atis,mysql,422,0.012,0.0,1.18,0.0,0.0,0.0,5,417
+qwen,imdb,mariadb,130,0.0,0.008,0.77,45.38,100.0,44.96,1,129
+gpt2xl,imdb,mariadb,127,0.087,0.102,13.39,0.79,5.88,0.0,17,110
+qwen,imdb,mysql,123,0.0,0.008,0.81,53.66,0.0,54.1,1,122
+gpt2xl,imdb,mysql,118,0.068,0.093,11.02,3.39,30.77,0.0,13,105
+qwen,yelp,mariadb,128,0.0,0.023,2.34,52.34,0.0,53.6,3,125
+gpt2xl,yelp,mariadb,124,0.097,0.0,8.06,0.0,0.0,0.0,10,114
+qwen,yelp,mysql,128,0.0,0.023,2.34,54.69,0.0,56.0,3,125
+gpt2xl,yelp,mysql,124,0.097,0.0,8.06,0.0,0.0,0.0,10,114
